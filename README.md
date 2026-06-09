@@ -18,7 +18,7 @@
   <p>
     <a href="./LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/License-Apache--2.0-blue.svg"></a>
     <img alt="Node.js" src="https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white">
-    <img alt="Status" src="https://img.shields.io/badge/status-preview-orange">
+    <img alt="Status" src="https://img.shields.io/badge/status-open-brightgreen">
   </p>
 </div>
 
@@ -135,8 +135,8 @@ Multi-agent protocol | Bring the same delivery process to Claude Code, Codex, Op
 
 ```bash
 # 1. Clone Loom and install dependencies
-git clone https://github.com/guoweilu/Loomline.git
-cd Loomline
+git clone https://github.com/valkor-ai/loom.git
+cd loom
 npm install
 
 # 2. Install or refresh the local adapter you use
