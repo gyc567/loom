@@ -122,13 +122,13 @@ Executable tools | Give agents CLI commands for context collection, task routing
 Backend readiness | Track databases, auth, storage, functions, environment variables, services, and runtime requirements as part of the delivery state.
 UIX guidance | Preserve visual direction, interaction flows, responsive states, accessibility expectations, and product-specific interface details as delivery requirements.
 Verification loop | Turn smoke tests, Playwright-style checks, logs, error summaries, repair requests, and re-verification into a repeatable loop.
-Multi-agent protocol | Bring the same delivery process to Claude Code, Codex, OpenCode/opencode, OpenClaw, Cline, Cursor Agent, and other agents.
+Multi-agent protocol | Bring the same delivery process to Claude Code, Codex, OpenCode and other agents.
 
 ## Prerequisites
 
 - Node.js >= 20
 - npm
-- The coding agent CLI for the adapter you install: Codex CLI for Codex, Claude Code CLI for Claude Code, or opencode CLI for opencode
+- The coding agent CLI for the adapter you install: Codex CLI for Codex, Claude Code CLI for Claude Code, or OpenCode CLI for OpenCode
 - Docker for `loom deploy`
 
 ## Quick Start
