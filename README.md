@@ -1,7 +1,7 @@
 <div align="center">
   <img src="./assets/loom-logo.svg" alt="Loom" width="560">
   <p><strong>Dynamic workflows for agentic software delivery.</strong></p>
-  <p>An open delivery harness that turns Claude Code, Codex, OpenCode/opencode, OpenClaw, Cline, Cursor Agent, and other coding agents into repeatable software delivery systems.</p>
+  <p>An open delivery harness that turns Claude Code, Codex, OpenCode and other coding agents into repeatable software delivery systems.</p>
   <p>
     <a href="./README.zh-CN.md">Simplified Chinese</a>
     ·
@@ -122,13 +122,13 @@ Executable tools | Give agents CLI commands for context collection, task routing
 Backend readiness | Track databases, auth, storage, functions, environment variables, services, and runtime requirements as part of the delivery state.
 UIX guidance | Preserve visual direction, interaction flows, responsive states, accessibility expectations, and product-specific interface details as delivery requirements.
 Verification loop | Turn smoke tests, Playwright-style checks, logs, error summaries, repair requests, and re-verification into a repeatable loop.
-Multi-agent protocol | Bring the same delivery process to Claude Code, Codex, OpenCode/opencode, OpenClaw, Cline, Cursor Agent, and other agents.
+Multi-agent protocol | Bring the same delivery process to Claude Code, Codex, OpenCode and other agents.
 
 ## Prerequisites
 
 - Node.js >= 20
 - npm
-- The coding agent CLI for the adapter you install: Codex CLI for Codex, Claude Code CLI for Claude Code, or opencode CLI for opencode
+- The coding agent CLI for the adapter you install: Codex CLI for Codex, Claude Code CLI for Claude Code, or OpenCode CLI for OpenCode
 - Docker for `loom deploy`
 
 ## Quick Start
@@ -147,7 +147,7 @@ npm run plugin:install-codex
 # Claude Code: installs the Claude Code plugin package, skills, hooks, and launcher.
 npm run plugin:install-claude
 
-# opencode: installs local slash commands, plugin hook, references, and launcher.
+# OpenCode: installs local slash commands, plugin hook, references, and launcher.
 npm run plugin:install-opencode
 
 # All adapters: useful when developing or testing multiple agents on this machine.
@@ -156,7 +156,7 @@ npm run plugin:install-adapters
 
 Each adapter install script builds the CLI, writes the stable launcher at `~/.loom/bin/loom-cli`, records adapter metadata under `~/.loom/adapters/<agent>`, and refreshes that agent's local adapter files. Agent-facing commands use this launcher instead of depending on a `loom` binary in your shell `PATH`.
 
-`plugin:install-adapters` installs or refreshes Codex, Claude Code, and opencode together.
+`plugin:install-adapters` installs or refreshes Codex, Claude Code, and OpenCode together.
 
 After installing or updating an adapter, open a new agent session so the refreshed local plugin is loaded.
 
@@ -189,7 +189,7 @@ Codex:
 @loom deploy
 ```
 
-Claude Code and opencode:
+Claude Code and OpenCode:
 
 ```text
 /loom build a visitor registration system
@@ -205,7 +205,7 @@ Use `continue` whenever you want Loom to resume or advance the current delivery 
 
 ```text
 @loom continue     # Codex
-/loom continue     # Claude Code and opencode
+/loom continue     # Claude Code and OpenCode
 ```
 
 Or run the CLI directly through the stable launcher:
@@ -244,7 +244,7 @@ See available commands | `"$HOME/.loom/bin/loom-cli" --help`
 Install or refresh all adapters | `npm run plugin:install-adapters`
 Install or refresh Codex adapter | `npm run plugin:install-codex`
 Install or refresh Claude Code adapter | `npm run plugin:install-claude`
-Install or refresh opencode adapter | `npm run plugin:install-opencode`
+Install or refresh OpenCode adapter | `npm run plugin:install-opencode`
 Run a local deployment preview | `"$HOME/.loom/bin/loom-cli" deploy run --project-root /path/to/project`
 
 ## FAQ
@@ -259,7 +259,7 @@ Those files are useful entry points, but they tend to become large prompts. Loom
 <details>
 <summary>Is Loom only for Codex?</summary>
 
-No. Loom is a CLI protocol for multiple coding agents. This repository currently ships local adapters for Codex, Claude Code, and opencode, and the workflow is designed for other agent platforms too.
+No. Loom is a CLI protocol for multiple coding agents. This repository currently ships local adapters for Codex, Claude Code, and OpenCode, and the workflow is designed for other agent platforms too.
 
 </details>
 
@@ -286,7 +286,7 @@ To remove all local Loom adapters from this machine:
 npm run plugin:uninstall-adapters
 ```
 
-The uninstall scripts remove only user-level adapter install artifacts, such as Codex plugin source/cache entries, Claude Code commands/skills, opencode commands/plugins/references, and `~/.loom/adapters/<agent>` metadata. They do not delete project-local `.loom/` delivery state. The shared launcher `~/.loom/bin/loom-cli` is removed only when no Loom adapter metadata remains under `~/.loom/adapters/`.
+The uninstall scripts remove only user-level adapter install artifacts, such as Codex plugin source/cache entries, Claude Code commands/skills, OpenCode commands/plugins/references, and `~/.loom/adapters/<agent>` metadata. They do not delete project-local `.loom/` delivery state. The shared launcher `~/.loom/bin/loom-cli` is removed only when no Loom adapter metadata remains under `~/.loom/adapters/`.
 
 After uninstalling an adapter, open a new agent session so that agent reloads its local command/plugin state.
 
