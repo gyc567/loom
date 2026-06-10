@@ -244,7 +244,7 @@ See available commands | `"$HOME/.loom/bin/loom-cli" --help`
 Install or refresh all adapters | `npm run plugin:install-adapters`
 Install or refresh Codex adapter | `npm run plugin:install-codex`
 Install or refresh Claude Code adapter | `npm run plugin:install-claude`
-Install or refresh opencode adapter | `npm run plugin:install-opencode`
+Install or refresh OpenCode adapter | `npm run plugin:install-opencode`
 Run a local deployment preview | `"$HOME/.loom/bin/loom-cli" deploy run --project-root /path/to/project`
 
 ## FAQ
