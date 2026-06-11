@@ -311,12 +311,49 @@ function writeFrontendDeliveryFixture(root) {
         workflowRefs: ["flow-submit-booking"],
         moduleRefs: ["module-booking-ui"],
       }],
+      dataViews: [{
+        viewId: "view-booking-form",
+        name: "Booking form",
+        purpose: "Let users enter booking details before submitting.",
+        targetObject: "Booking",
+        selectionMode: "not_applicable",
+        paginationRequired: false,
+        defaultLoadsFirstPage: false,
+        searchCriteria: [],
+        sourceRefs: ["AC-booking"],
+      }],
+      actions: [{
+        actionId: "action-submit-booking",
+        label: "Submit booking",
+        targetObject: "Booking",
+        entryPoint: "form_submit",
+        inputFields: ["customerName"],
+        resultObservation: ["response_message", "detail_refresh"],
+        refreshPolicy: "refresh_detail",
+        successFeedback: ["Booking result appears"],
+        blockingOrErrorFeedback: ["Customer name is required"],
+        sourceRefs: ["AC-booking"],
+      }],
+      operationPaths: [{
+        pathId: "path-submit-booking",
+        name: "Submit booking path",
+        userGoal: "Submit a booking from the web UI and see the result.",
+        surfaceRef: "surface-booking",
+        workflowRef: "flow-submit-booking",
+        targetObject: "Booking",
+        selectionMode: "not_applicable",
+        selectionSummary: "User opens the booking form, enters details, submits, and sees a refreshed booking result or blocking message.",
+        dataViewRefs: ["view-booking-form"],
+        actionRefs: ["action-submit-booking"],
+        requiredStates: ["loading", "success", "error", "business_blocking"],
+        sourceRefs: ["AC-booking"],
+      }],
       navigation: {
         required: true,
         pattern: "single_page_primary_action",
         items: [{ label: "Booking", targetSurfaceRef: "surface-booking" }],
       },
-      interactionStates: ["idle", "loading", "success", "error", "empty"],
+      interactionStates: ["idle", "loading", "success", "error", "empty", "business_blocking"],
       mustNot: ["Do not deliver only descriptive static text for the booking workflow."],
       notes: ["Fixture frontend contract."],
     },
@@ -487,11 +524,19 @@ try {
   assert.equal(guidance?.responsibility, "workflow_implementation");
   assert.deepEqual(guidance?.surfacesInScope?.map((surface) => surface.surfaceId), ["surface-booking"]);
   assert.deepEqual(guidance?.workflowsInScope?.map((workflow) => workflow.workflowRef), ["flow-submit-booking"]);
+  assert.deepEqual(guidance?.dataViewsInScope?.map((view) => view.viewId), ["view-booking-form"]);
+  assert.deepEqual(guidance?.actionsInScope?.map((action) => action.actionId), ["action-submit-booking"]);
+  assert.deepEqual(guidance?.operationPathsInScope?.map((operationPath) => operationPath.pathId), ["path-submit-booking"]);
+  assert.equal(guidance?.operationPathsInScope?.[0]?.selectionSummary.includes("booking form"), true);
+  assert.equal(guidance?.operationPathWarnings?.length, 0);
   assert.deepEqual(guidance?.dataBindingExpectation?.interfacesInScope, ["if-create-booking", "if-booking-form"]);
   assert.equal(guidance?.dataBindingExpectation?.requiredModeForSatisfaction, "wired");
   assert.deepEqual(guidance?.dataBindingExpectation?.closureRequirementIds, ["closure:flow-submit-booking:step-submit"]);
   assert.equal(guidance?.workflowClosureRequirements?.length, 1, "frontend guidance must project workflow closure requirements for assigned closure tasks.");
   assert.equal(guidance.workflowClosureRequirements[0].workflowRef, "flow-submit-booking");
+  assert.deepEqual(guidance.workflowClosureRequirements[0].operationPathRefs, ["path-submit-booking"]);
+  assert.deepEqual(guidance.workflowClosureRequirements[0].dataViewRefs, ["view-booking-form"]);
+  assert.deepEqual(guidance.workflowClosureRequirements[0].actionRefs, ["action-submit-booking"]);
   assert.deepEqual(guidance.workflowClosureRequirements[0].interfaceRefs, ["if-create-booking"]);
   assert.equal(guidance.workflowClosureRequirements[0].requiredDataBindingMode, "wired");
   assert.equal(guidance?.bindingProjectionRules?.apiContractAuthority, "AAC global interfaces. Task scope and workflow refs only select the most relevant bindings.");
@@ -525,6 +570,9 @@ try {
   assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings"), "agent read plan must name frontendBackendBindings.");
   assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.unresolvedBindingInputs"), "agent read plan must name unresolved binding inputs.");
   assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.workflowClosureRequirements"), "agent read plan must name workflow closure requirements.");
+  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.operationPathsInScope"), "agent read plan must name operation paths.");
+  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.dataViewsInScope"), "agent read plan must name data views.");
+  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.actionsInScope"), "agent read plan must name frontend actions.");
   assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.dataBindingExpectation"), "agent read plan must name data-binding expectations for closure tasks.");
   assert.ok(requiredReads.includes("sourceContext.architectureArtifactProjection"), "agent read plan must require task-scoped AAC projection.");
 
@@ -540,6 +588,9 @@ try {
   assert.deepEqual(projection.interfaceContracts?.find((item) => item.interfaceId === "if-create-booking")?.requestSchema, [{ fieldId: "field-customer-name", name: "customerName", type: "string", required: true }]);
   assert.equal(projection.userFlowDetails?.[0]?.steps?.[0]?.systemResponse, "Booking result appears", "AAC projection must include user flow step response.");
   assert.equal(projection.userFlowDetails?.[0]?.outcomes?.[0]?.description, "Booking is accepted.", "AAC projection must include user flow outcomes.");
+  assert.equal(projection.frontendOperationPathDetails?.operationPaths?.[0]?.pathId, "path-submit-booking", "AAC projection must include task-relevant operation paths.");
+  assert.equal(projection.frontendOperationPathDetails?.dataViews?.[0]?.viewId, "view-booking-form", "AAC projection must include task-relevant data views.");
+  assert.equal(projection.frontendOperationPathDetails?.actions?.[0]?.actionId, "action-submit-booking", "AAC projection must include task-relevant frontend actions.");
   assert.equal(projection.entityDetails?.[0]?.constraints?.[0]?.description, "Customer name is required before booking submission.", "AAC projection must include entity constraints.");
   assert.equal(projection.dataConstraints?.[0]?.description, "A booking submission must include valid customer details before it can be accepted.", "AAC projection must include global data constraints.");
   assert.equal(projection.stateMachineDetails?.[0]?.transitions?.[0]?.guards?.[0], "Customer name is present.", "AAC projection must include state transition guards.");
@@ -558,6 +609,9 @@ try {
   assert.equal(frontendRules.frontendBackendBindingsField, "task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings");
   assert.equal(frontendRules.unresolvedBindingInputsField, "task.frontendExperienceRequirement.executionGuidance.unresolvedBindingInputs");
   assert.equal(frontendRules.workflowClosureRequirementsField, "task.frontendExperienceRequirement.executionGuidance.workflowClosureRequirements");
+  assert.equal(frontendRules.operationPathsField, "task.frontendExperienceRequirement.executionGuidance.operationPathsInScope");
+  assert.equal(frontendRules.dataViewsField, "task.frontendExperienceRequirement.executionGuidance.dataViewsInScope");
+  assert.equal(frontendRules.actionsField, "task.frontendExperienceRequirement.executionGuidance.actionsInScope");
   assert.equal(frontendRules.useFrontendBackendBindingsFirst, true);
   assert.equal(frontendRules.frontendBackendBindingsAreNotAllowlist, true);
   assert.equal(frontendRules.executionGuidanceIsNonBlocking, true);
@@ -615,6 +669,9 @@ try {
   ], projectRoot);
   const selfCheckShape = fieldValue(selfCheckRead, "outputContract.schemaShape.frontendExperienceSelfCheck");
   assert.ok(selfCheckShape.workflowsCovered, "frontend self-check shape must guide workflow evidence.");
+  assert.ok(selfCheckShape.dataViewsUsed, "frontend self-check shape must guide data view evidence.");
+  assert.ok(selfCheckShape.actionsImplemented, "frontend self-check shape must guide frontend action evidence.");
+  assert.ok(selfCheckShape.operationPathsCovered, "frontend self-check shape must guide operation path evidence.");
   assert.ok(selfCheckShape.userActionsImplemented, "frontend self-check shape must guide user action evidence.");
   assert.ok(selfCheckShape.dataBinding, "frontend self-check shape must guide data-binding evidence.");
   assert.equal(selfCheckShape.dataBinding.requiredModeForSatisfaction, "wired", "frontend self-check shape must require wired mode for closure satisfaction.");

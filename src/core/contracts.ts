@@ -238,6 +238,8 @@ export const planningGenerationContractSchema = z.object({
     actors: z.array(z.unknown()),
     capabilityGroups: z.array(z.unknown()),
     businessFlows: z.array(z.unknown()),
+    frontendExperience: z.record(z.unknown()).nullable().optional(),
+    frontendExperienceDelta: z.record(z.unknown()).nullable().optional(),
     sourceRefs: stringArraySchema,
     contextNotes: stringArraySchema,
   }),
