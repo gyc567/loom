@@ -238,7 +238,12 @@ function verifyGreenfieldRequestGuidance() {
     assert.ok(request.selectionGuidance, "greenfield request must include selectionGuidance");
     assert.ok(fields.includes("selectionGuidance"), "selectionGuidance must be part of the inspect read plan");
     assert.equal(request.selectionGuidance.commonOptions.backend.label, "Backend / service");
-    assert.ok(request.selectionGuidance.commonOptions.backend.examples.includes("Java (Spring Boot)"));
+    assert.ok(request.selectionGuidance.commonOptions.backend.examples.includes("Java + Spring Boot"));
+    assert.ok(request.selectionGuidance.commonOptions.backend.examples.includes("Python + FastAPI"));
+    assert.ok(request.selectionGuidance.commonOptions.backend.examples.includes("Python + Django"));
+    assert.ok(request.selectionGuidance.commonOptions.dataAccess.examples.includes("MyBatis Plus"));
+    assert.ok(request.selectionGuidance.shorthandNormalization.backend.some((rule) => /backend=Java/.test(rule) && /Java \+ Spring Boot/.test(rule)));
+    assert.ok(request.selectionGuidance.shorthandNormalization.backend.some((rule) => /backend=Python/.test(rule) && /Python \+ FastAPI/.test(rule)));
     assert.equal(request.selectionGuidance.trackModel.customTechnologyPolicy.includes("not a whitelist"), true);
     assert.match(request.selectionGuidance.recommendationBasis.authority, /complete BrainstormContract/);
     assert.match(request.selectionGuidance.recommendationBasis.currentPhaseLensRole, /first implementation slice only/);

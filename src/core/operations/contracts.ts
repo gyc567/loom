@@ -268,6 +268,7 @@ function technicalBaselineSelectionGuidance(input: {
       wordingRules: [
         "Do not present the recommendation as based only on the first phase or current small implementation slice.",
         "Do not omit the adjustable technology range.",
+        "Do not present backend options as bare language-only labels when a mainstream framework choice is expected; show language + framework combinations in user-facing examples.",
         "Do not use db or orm as the primary reply keys; use persistence and dataAccess in the primary examples.",
         "It is fine to understand db as persistence and orm as dataAccess when the user writes those aliases, but normalize the final candidate to stack.tracks.persistence and stack.tracks.dataAccess.",
       ],
@@ -283,7 +284,7 @@ function technicalBaselineSelectionGuidance(input: {
       },
       backend: {
         label: "Backend / service",
-        examples: ["Next.js server capabilities (Server Actions / Route Handlers / SSR)", "Node.js (Fastify / Express / NestJS)", "Python (FastAPI / Django)", "Java (Spring Boot)", "Go", ".NET", "No independent backend"],
+        examples: ["Next.js + Server Actions / Route Handlers / SSR", "Node.js + Fastify", "Node.js + Express", "Node.js + NestJS", "Python + FastAPI", "Python + Django", "Java + Spring Boot", "Go + net/http or Gin", ".NET + ASP.NET Core", "No independent backend"],
       },
       persistence: {
         label: "Database / persistence",
@@ -291,12 +292,25 @@ function technicalBaselineSelectionGuidance(input: {
       },
       dataAccess: {
         label: "ORM / data access",
-        examples: ["Prisma", "Drizzle", "TypeORM", "SQLAlchemy", "Django ORM", "Spring Data JPA", "Entity Framework", "Raw SQL / lightweight wrapper", "No ORM"],
+        examples: ["Prisma", "Drizzle", "TypeORM", "SQLAlchemy", "Django ORM", "Spring Data JPA", "MyBatis Plus", "Entity Framework", "Raw SQL / lightweight wrapper", "No ORM"],
       },
       externalServices: {
         label: "External services",
         examples: ["None", "User specified", "Only recommend services explicitly required by the confirmed requirement"],
       },
+    },
+    shorthandNormalization: {
+      backend: [
+        "If the user writes backend=Java without a framework, normalize it to Java + Spring Boot unless they explicitly name a different Java backend stack.",
+        "If the user writes backend=Python without a framework, normalize it to Python + FastAPI for service/backend work unless the requirement or user explicitly points to Django-style site/admin/content capabilities.",
+        "If the user writes backend=Node.js without a framework, ask for or summarize a concrete Node.js framework choice such as Fastify, Express, or NestJS before final confirmation.",
+        "If the user writes backend=.NET without a framework, normalize it to .NET + ASP.NET Core unless they explicitly name another .NET backend stack.",
+      ],
+      dataAccessCompatibility: [
+        "When backend is Java + Spring Boot and dataAccess is not specified, recommend Spring Data JPA or MyBatis Plus explicitly before final confirmation; do not leave it as generic Java persistence.",
+        "When backend is Python + FastAPI and dataAccess is not specified, recommend SQLAlchemy or SQLModel explicitly before final confirmation.",
+        "When backend is Python + Django and dataAccess is not specified, recommend Django ORM explicitly before final confirmation.",
+      ],
     },
     recommendationPrinciples: [
       "Prefer mainstream, maintainable, community-mature technologies.",
