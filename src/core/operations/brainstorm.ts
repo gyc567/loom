@@ -593,7 +593,10 @@ export async function acceptBrainstormCandidate(input: AcceptBrainstormCandidate
   }
   const locator = await resolveBrainstormLocator(root, parsedCandidate.brainstormRunId, deliveryId, input.phaseId ?? parsedCandidate.phaseId);
   const existing = await loadBrainstormContract(root, parsedCandidate.brainstormRunId);
-  const candidate = normalizeBrainstormCandidateRoadmapForAccept(parsedCandidate, existing, locator.phaseId);
+  const candidate = normalizeBrainstormCandidateRoadmapRequirementForAccept(
+    normalizeBrainstormCandidateRoadmapForAccept(parsedCandidate, existing, locator.phaseId),
+    locator.phaseId,
+  );
   const requestIssues = await validateBrainstormAcceptRequest(root, {
     deliveryId: locator.deliveryId,
     phaseId: locator.phaseId,
@@ -1868,6 +1871,7 @@ function brainstormCandidateSchemaShape(input: {
       "phasePlan.current.scopeRefs may reference only scope.included ids.",
       "Excluded scope belongs only in scope.excluded and roadmap phase excluded refs when supported; deferred scope belongs only in scope.deferred or nextPhasePreview.",
       "phasePlan.current.acceptanceRefs may reference only acceptance[].id values.",
+      "roadmap.required is normalized by Loom on accept from confirmed scope and phasePlan signals. Do not let this boolean override scope.deferred or phasePlan.nextPhasePreview.",
       "If clarificationProgress confirms frontend_experience, include frontendExperience or frontendExperienceDelta. If the frontend block is skipped, include skippedBlocks with a concrete reason and do not invent frontend work.",
       "When frontendExperience is present, it is the user-confirmed product target that AAC must consume later; do not use it for implementation details.",
       "Write page operation path details into frontendExperience.dataViews/actions/operationPaths or frontendExperienceDelta.*Deltas; do not leave them only in confirmationSummary or chat.",
@@ -2427,7 +2431,7 @@ function normalizeBrainstormCandidateRoadmapForAccept(
   }
   const candidatePhaseIds = new Set(candidate.roadmap.phases.map((phase) => phase.phaseId));
   const priorPhases = existingPhases
-    .filter((phase) => phase.phaseId !== activePhaseId && !candidatePhaseIds.has(phase.phaseId))
+    .filter((phase) => isPriorRoadmapPhase(phase, activePhaseId) && !candidatePhaseIds.has(phase.phaseId))
     .map((phase) => ({
       phaseId: phase.phaseId,
       title: phase.name,
@@ -2454,6 +2458,69 @@ function normalizeBrainstormCandidateRoadmapForAccept(
       ],
     },
   });
+}
+
+function normalizeBrainstormCandidateRoadmapRequirementForAccept(
+  candidate: BrainstormCandidate,
+  activePhaseId: string,
+): BrainstormCandidate {
+  const required = deriveRoadmapRequiredFromCandidate(candidate, activePhaseId);
+  if (candidate.roadmap.required === required) {
+    return candidate;
+  }
+  return brainstormCandidateSchema.parse({
+    ...candidate,
+    roadmap: {
+      ...candidate.roadmap,
+      required,
+    },
+  });
+}
+
+function deriveRoadmapRequiredFromCandidate(
+  candidate: BrainstormCandidate,
+  activePhaseId: string,
+): boolean {
+  if (candidate.scope.deferred.length > 0) {
+    return true;
+  }
+  if (candidate.phasePlan.nextPhasePreview.kind === "candidate") {
+    return true;
+  }
+  return hasFutureProposedPhase(candidate, activePhaseId);
+}
+
+function hasFutureProposedPhase(
+  candidate: BrainstormCandidate,
+  activePhaseId: string,
+): boolean {
+  const currentPhaseId = candidate.roadmap.currentPhaseId || activePhaseId;
+  return candidate.roadmap.phases.some((phase) =>
+    phase.phaseId !== currentPhaseId && phase.status === "proposed"
+  );
+}
+
+function isPriorRoadmapPhase(
+  phase: NonNullable<BrainstormContract["roadmap"]>["phases"][number],
+  activePhaseId: string,
+): boolean {
+  if (phase.phaseId === activePhaseId) {
+    return false;
+  }
+  const phaseOrdinal = phaseOrdinalFromId(phase.phaseId);
+  const activeOrdinal = phaseOrdinalFromId(activePhaseId);
+  if (phaseOrdinal !== null && activeOrdinal !== null) {
+    return phaseOrdinal < activeOrdinal;
+  }
+  return phase.status !== "proposed";
+}
+
+function phaseOrdinalFromId(phaseId: string): number | null {
+  const match = /^phase-(\d+)$/.exec(phaseId);
+  if (!match) {
+    return null;
+  }
+  return Number.parseInt(match[1] ?? "", 10);
 }
 
 async function writeBrainstormDerivedArtifacts(
@@ -2618,6 +2685,7 @@ function brainstormContractFromCandidate(
   now: string,
 ): BrainstormContract {
   const currentPhaseId = candidate.roadmap.currentPhaseId || phaseId;
+  const roadmapRequired = deriveRoadmapRequiredFromCandidate(candidate, phaseId);
   const includedIds = new Set(candidate.scope.included.map((item) => item.id));
   const deferredIds = new Set(candidate.scope.deferred.map((item) => item.id));
   const excludedIds = new Set(candidate.scope.excluded.map((item) => item.id));
@@ -2626,7 +2694,7 @@ function brainstormContractFromCandidate(
     roadmapId,
     status: "active" as const,
     strategy: "multi_phase" as const,
-    reason: candidate.roadmap.required
+    reason: roadmapRequired
       ? "Agent-managed Brainstorm confirmed a multi-phase roadmap."
       : "Internal phase model is used even for a single-phase delivery.",
     currentPhaseId,
@@ -2682,8 +2750,8 @@ function brainstormContractFromCandidate(
       coverageNotes: ["BrainstormCandidate accepted from Agent-managed conversation."],
     },
     deliveryStrategy: {
-      mode: candidate.roadmap.required ? "roadmap" : "single_phase",
-      reason: candidate.roadmap.required
+      mode: roadmapRequired ? "roadmap" : "single_phase",
+      reason: roadmapRequired
         ? "Agent-managed Brainstorm confirmed a roadmap delivery."
         : "Agent-managed Brainstorm confirmed a single-phase delivery using phase-1.",
       recommendedCurrentPhaseId: currentPhaseId,
