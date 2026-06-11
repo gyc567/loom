@@ -1,11 +1,11 @@
 <div align="center">
   <img src="./assets/loom-logo.svg" alt="Loom" width="560">
-  <p><strong>Dynamic workflows for agentic software delivery.</strong></p>
+  <p><strong>Loop engineering for agentic software delivery.</strong></p>
   <p>An open delivery harness that turns Claude Code, Codex, OpenCode and other coding agents into repeatable software delivery systems.</p>
   <p>
     <a href="./README.zh-CN.md">Simplified Chinese</a>
     ·
-    <a href="#why-a-harness">Why a Harness?</a>
+    <a href="https://zonodqioyxil6r3k.public.blob.vercel-storage.com/Loomline-v0.pdf">Technical Report</a>
     ·
     <a href="#use-cases">Use Cases</a>
     ·
@@ -27,6 +27,8 @@
 Loom is an open-source delivery harness for existing coding agents. It does not replace the model or editor you already use; it turns each delivery goal into a structured loop of planning, building, verification, repair, preview, and handoff.
 
 Loom uses dynamic workflows to choose the right delivery path for each goal, then makes that path durable: project context, task contracts, backend state, test results, preview evidence, repair notes, and handoff reports are persisted so the next session, agent, or CLI can continue without starting over.
+
+Instead of a one-shot prompt chain, Loom treats delivery as a loop: route the next step, execute, verify, record evidence, repair when needed, and continue from saved state.
 
 Coding agents can write code. Loom helps them keep the delivery promise from idea to release, with fewer wasted tokens.
 
@@ -257,9 +259,9 @@ Those files are useful entry points, but they tend to become large prompts. Loom
 </details>
 
 <details>
-<summary>Is Loom only for Codex?</summary>
+<summary>What happens if a delivery is interrupted?</summary>
 
-No. Loom is a CLI protocol for multiple coding agents. This repository currently ships local adapters for Codex, Claude Code, and OpenCode, and the workflow is designed for other agent platforms too.
+Loom stores project-local delivery state under `.loom/`, including context, task plans, result records, review notes, repair requests, and deployment evidence. Reopen the agent session and run `@loom continue` in Codex or `/loom continue` in Claude Code and OpenCode; Loom will route the next step from the saved delivery state.
 
 </details>
 
