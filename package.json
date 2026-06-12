@@ -36,6 +36,7 @@
     "verify:read-plan-inspect": "node scripts/verify-read-plan-inspect.js",
     "verify:read-plan-size-audit": "node scripts/verify-read-plan-size-audit.js",
     "verify:deploy-preview-validation": "node scripts/verify-deploy-preview-validation.js",
+    "verify:deploy-capability": "npm run smoke:deploy",
     "verify:requirement-context": "node scripts/verify-requirement-context-keyword-hints.js",
     "agent:e2e-guard": "node scripts/guard-agent-e2e-processes.js",
     "audit:claude-log": "node scripts/audit-claude-loom-session.js",
