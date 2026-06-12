@@ -743,7 +743,7 @@ async function readEnvSignals(projectRoot: string): Promise<string> {
   return values.join("\n");
 }
 
-function serviceDefinition(kind: DependencyServiceKind, reason: string): DependencyService {
+export function serviceDefinition(kind: DependencyServiceKind, reason: string): DependencyService {
   switch (kind) {
     case "postgres":
       return {

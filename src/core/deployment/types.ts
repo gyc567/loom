@@ -136,7 +136,9 @@ export type DeploymentEnvSource =
   | "env-example"
   | "local-env-file"
   | "source-code"
-  | "framework";
+  | "configuration"
+  | "framework"
+  | "runtime-contract";
 
 export type DeploymentEnvVariable = {
   name: string;
@@ -220,6 +222,12 @@ export type DeploymentRuntimeContract = {
   healthPath: string | null;
   apiPaths: string[];
   frontendOutputDir: string | null;
+  probeKind: "http" | "process" | "command";
+  environment: {
+    required: string[];
+    optional: string[];
+  };
+  dependencyServices: DependencyService[];
 };
 
 export type DeploymentSpec = {

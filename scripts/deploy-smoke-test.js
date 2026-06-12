@@ -38,6 +38,7 @@ async function main() {
   await verifyRuntimeContractPrepare(join(root, "runtime-contract-prepare"));
   await verifyRuntimeContractPromotesRootWorkspaceWhenChildrenAreSourceOnly(join(root, "runtime-contract-root-workspace"));
   await verifyRuntimeContractSuppressesHeuristicDependencyServices(join(root, "runtime-contract-suppresses-heuristic-deps"));
+  await verifyRuntimeContractDerivesDependencyServicesFromEnvironment(join(root, "runtime-contract-env-deps"));
   await verifyStaleRuntimeContractSpecReprepare(join(root, "runtime-contract-stale-reprepare"));
   await verifyDeployUsesPreviousCompletedPhaseRuntimeContract(join(root, "runtime-contract-previous-completed-phase"));
   await verifyDeployRunDockerUnavailableWritesRepairRequest(join(root, "docker-unavailable-repair"));
@@ -1267,6 +1268,59 @@ async function verifyRuntimeContractSuppressesHeuristicDependencyServices(projec
   assert.doesNotMatch(compose, /DATABASE_URL: "postgresql:\/\/loom:loom@postgres:5432\/loom"/);
 }
 
+async function verifyRuntimeContractDerivesDependencyServicesFromEnvironment(projectRoot) {
+  await writePackage(projectRoot, {
+    scripts: {
+      build: "vite build && tsc -p tsconfig.server.json",
+      start: "node dist/server.js",
+    },
+    dependencies: {
+      express: "^4.18.0",
+      vite: "^6.0.0",
+    },
+  });
+  await writeFile(join(projectRoot, "server.js"), "console.log(process.env.SPRING_DATASOURCE_URL)\n", "utf8");
+  await writeAcceptedRuntimeDelivery(projectRoot, {
+    runtimeKind: "spring_boot_serves_vite_static",
+    startPort: 4173,
+    buildCommand: "npm run build",
+    startCommand: "npm run start",
+    previewPath: "/",
+    healthPath: "/ready",
+    frontendOutputDir: "dist/web",
+    environment: {
+      required: [
+        "PORT",
+        "SPRING_DATASOURCE_URL",
+        "SPRING_DATASOURCE_USERNAME",
+        "SPRING_DATASOURCE_PASSWORD",
+      ],
+      optional: ["SPRING_PROFILES_ACTIVE"],
+    },
+  });
+
+  const prepare = runDeployPrepare(projectRoot);
+  assert.equal(prepare.ok, true);
+
+  const spec = JSON.parse(await readFile(join(projectRoot, ".loom/deployment/specs/local.json"), "utf8"));
+  assert.equal(spec.runtimeContract.dependencyServicePolicy, "contract_only");
+  assert.equal(spec.runtimeContract.probeKind, "http");
+  assert.deepEqual(spec.runtimeContract.environment.required, [
+    "PORT",
+    "SPRING_DATASOURCE_URL",
+    "SPRING_DATASOURCE_USERNAME",
+    "SPRING_DATASOURCE_PASSWORD",
+  ]);
+  assert.ok(spec.runtimeContract.dependencyServices.some((service) => service.kind === "postgres"));
+  assert.ok(spec.detectedStack.services.some((service) => service.kind === "postgres"));
+  assert.ok(spec.environment.provided.includes("SPRING_DATASOURCE_URL"));
+  assert.ok(!spec.environment.missing.some((variable) => variable.name === "SPRING_DATASOURCE_URL"));
+
+  const compose = await readFile(join(projectRoot, ".loom/deployment/specs/generated/compose.yaml"), "utf8");
+  assert.match(compose, /postgres:16-alpine/);
+  assert.match(compose, /SPRING_DATASOURCE_URL: "jdbc:postgresql:\/\/postgres:5432\/loom"/);
+}
+
 async function verifyStaleRuntimeContractSpecReprepare(projectRoot) {
   await writePackage(projectRoot, {
     scripts: {
@@ -2182,7 +2236,7 @@ async function writeAcceptedRuntimeDelivery(projectRoot, input) {
     runtimeDelivery: {
       status: "modified",
       contractVersion: "phase-1-v1",
-      runtimeKind: "node_express_serves_vite_static",
+      runtimeKind: input.runtimeKind ?? "node_express_serves_vite_static",
       basis: { technicalBaselineRef: "technical-baseline", repositoryContextRef: "repository-context", planningGenerationContractRef: "planning-contract", previousRuntimeDeliveryRef: null, reason: "Deploy smoke fixture runtime contract." },
       build: { command: input.buildCommand, workingDirectory: ".", outputs: ["dist/server", input.frontendOutputDir], codeLevelExpectations: ["Build produces server and frontend outputs."] },
       start: { command: input.startCommand, workingDirectory: ".", entry: "dist/server.js", host: "0.0.0.0", port: input.startPort, portEnv: "PORT", codeLevelExpectations: ["Start serves the app on the declared port."] },
@@ -2195,7 +2249,7 @@ async function writeAcceptedRuntimeDelivery(projectRoot, input) {
       httpProbes: { previewPath: input.previewPath, healthPath: input.healthPath, apiPaths: ["/api/health"], expectedStatus: "2xx_or_3xx" },
       frontend: { required: true, kind: "vite_react", buildCommand: "npm run build:web", sourceRoot: "src/ui", outputDir: input.frontendOutputDir, servedBy: "express_static", servedByRef: "src/server.ts", codeLevelExpectations: ["Frontend output is mounted by the server."] },
       api: { required: true, kind: "express", buildCommand: "npm run build:api", entry: "dist/server.js", basePath: "/api", probePaths: ["/api/health"], codeLevelExpectations: ["Health API remains available."] },
-      environment: { required: [], optional: ["PORT"] },
+      environment: input.environment ?? { required: [], optional: ["PORT"] },
       taskPlanningGuidance: {
         requireRuntimeDeliveryRequirementWhenTaskTouches: ["build_or_packaging", "runtime_entry", "serving_or_routing", "configuration_or_environment", "generated_artifacts", "runtime_surface"],
         doNotRequireForTaskKinds: ["domain_only_validation", "copy_only_documentation", "pure_unit_test_additions"],

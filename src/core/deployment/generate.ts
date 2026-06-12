@@ -76,6 +76,12 @@ export function createDeploymentSpec(input: {
       healthPath: input.detectedStack.healthcheckPath ?? null,
       apiPaths: [],
       frontendOutputDir: input.detectedStack.outputDirectory,
+      probeKind: input.detectedStack.startCommand ? "http" : "process",
+      environment: {
+        required: [],
+        optional: [],
+      },
+      dependencyServices: [],
     },
     files: {
       dockerfilePath,

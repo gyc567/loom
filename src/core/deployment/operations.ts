@@ -262,6 +262,7 @@ export async function deployPrepare(input: {
       ...generatedRuntimeEnvironment(contractStack),
       ...generatedDependencyEnvironment(contractStack),
     },
+    contractEnvironment: runtimeContract.environment,
   });
   const bootstrap = await analyzeDeploymentBootstrap({
     deploymentRoot,
@@ -1256,7 +1257,10 @@ function runtimeContractsEquivalent(
     left.previewPath === right.previewPath &&
     left.healthPath === right.healthPath &&
     left.frontendOutputDir === right.frontendOutputDir &&
-    JSON.stringify(left.apiPaths) === JSON.stringify(right.apiPaths)
+    left.probeKind === right.probeKind &&
+    JSON.stringify(left.apiPaths) === JSON.stringify(right.apiPaths) &&
+    JSON.stringify(left.environment) === JSON.stringify(right.environment) &&
+    JSON.stringify(left.dependencyServices) === JSON.stringify(right.dependencyServices)
   );
 }
 
@@ -1273,7 +1277,8 @@ function deploymentStackDiffers(
     left.framework !== right.framework ||
     left.packageManager !== right.packageManager ||
     left.runtimeVersion !== right.runtimeVersion ||
-    left.runtimeVersionSource !== right.runtimeVersionSource
+    left.runtimeVersionSource !== right.runtimeVersionSource ||
+    JSON.stringify(left.services) !== JSON.stringify(right.services)
   );
 }
 
@@ -1576,7 +1581,9 @@ function applyRuntimeContractToStack(
     healthcheckPath: runtimeContract.healthPath ?? runtimeContract.previewPath ?? stack.healthcheckPath,
     outputDirectory: runtimeContract.frontendOutputDir ?? stack.outputDirectory,
     port: runtimeContract.port ?? stack.port,
-    services: runtimeContract.dependencyServicePolicy === "contract_only" ? [] : stack.services,
+    services: runtimeContract.dependencyServicePolicy === "contract_only"
+      ? runtimeContract.dependencyServices
+      : mergeDependencyServices(stack.services, runtimeContract.dependencyServices),
   };
 }
 
@@ -1694,11 +1701,34 @@ function runtimeContractSignals(runtimeContract: DeploymentSpec["runtimeContract
     runtimeContract.buildCommand,
     runtimeContract.startCommand,
     runtimeContract.frontendOutputDir,
+    ...runtimeContract.environment.required,
+    ...runtimeContract.environment.optional,
+    ...runtimeContract.dependencyServices.flatMap((service) => [
+      service.kind,
+      service.serviceName,
+      service.image,
+      ...Object.keys(service.connectionEnv),
+      ...Object.values(service.connectionEnv),
+    ]),
     ...runtimeContract.apiPaths,
   ]
     .filter((value): value is string => typeof value === "string")
     .join("\n")
     .toLowerCase();
+}
+
+function mergeDependencyServices(
+  detected: DeploymentSpec["detectedStack"]["services"],
+  declared: DeploymentSpec["detectedStack"]["services"],
+): DeploymentSpec["detectedStack"]["services"] {
+  const byKind = new Map<string, DeploymentSpec["detectedStack"]["services"][number]>();
+  for (const service of detected) {
+    byKind.set(service.kind, service);
+  }
+  for (const service of declared) {
+    byKind.set(service.kind, service);
+  }
+  return [...byKind.values()];
 }
 
 function deploymentStartCommand(
