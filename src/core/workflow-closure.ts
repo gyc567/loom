@@ -5,6 +5,9 @@ export type WorkflowClosureRequirement = {
   workflowRef: string;
   workflowName: string;
   surfaceRefs: string[];
+  operationPathRefs: string[];
+  dataViewRefs: string[];
+  actionRefs: string[];
   moduleRefs: string[];
   acceptanceRefs: string[];
   interfaceRefs: string[];
@@ -29,6 +32,7 @@ export type WorkflowClosureRequirement = {
     interfaceId: string;
     name: string;
     type: ArchitectureArtifactContract["interfaces"][number]["type"];
+    role?: ArchitectureArtifactContract["interfaces"][number]["role"];
     method?: string;
     path?: string;
     requestSchema: ArchitectureArtifactContract["interfaces"][number]["requestSchema"];
@@ -65,6 +69,13 @@ export function buildWorkflowClosureRequirements(aac: ArchitectureArtifactContra
   for (const [workflowRef, surfaceRefs] of surfaceRefsByFlow) {
     const flow = flowById.get(workflowRef);
     if (!flow || flow.kind !== "user_interaction" || flow.steps.length === 0) continue;
+    const operationPaths = (frontend.operationPaths ?? []).filter((operationPath) =>
+      operationPath.workflowRef === workflowRef ||
+      (operationPath.surfaceRef ? surfaceRefs.includes(operationPath.surfaceRef) : false)
+    );
+    const operationPathRefs = uniqueRefs(operationPaths.map((operationPath) => operationPath.pathId));
+    const dataViewRefs = uniqueRefs(operationPaths.flatMap((operationPath) => operationPath.dataViewRefs));
+    const actionRefs = uniqueRefs(operationPaths.flatMap((operationPath) => operationPath.actionRefs));
 
     for (const step of flow.steps) {
       const candidateInterfaceRefs = uniqueRefs(step.interfaceRefs.length > 0 ? step.interfaceRefs : flow.interfaceRefs);
@@ -83,6 +94,9 @@ export function buildWorkflowClosureRequirements(aac: ArchitectureArtifactContra
         workflowRef: flow.flowId,
         workflowName: flow.name,
         surfaceRefs,
+        operationPathRefs,
+        dataViewRefs,
+        actionRefs,
         moduleRefs: flow.moduleRefs,
         acceptanceRefs: flow.acceptanceRefs,
         interfaceRefs,
@@ -107,6 +121,7 @@ export function buildWorkflowClosureRequirements(aac: ArchitectureArtifactContra
           interfaceId: contract.interfaceId,
           name: contract.name,
           type: contract.type,
+          ...(contract.role ? { role: contract.role } : {}),
           ...(contract.method ? { method: contract.method } : {}),
           ...(contract.path ? { path: contract.path } : {}),
           requestSchema: contract.requestSchema ?? [],

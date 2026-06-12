@@ -245,6 +245,34 @@ function technicalBaselineSelectionGuidance(input: {
       coreTracks: ["web", "app", "backend", "persistence", "dataAccess", "externalServices"],
       customTechnologyPolicy: "Common options are examples, not a whitelist. User-specified technologies outside these examples are allowed, but mark the relevant track source as user_specified or user_custom and include it in the final confirmation summary and reasoningSummary.",
     },
+    recommendationBasis: {
+      authority: "Use the complete BrainstormContract as the product-scope authority for the first greenfield TechnicalBaseline recommendation.",
+      mustRead: [
+        "contextRefs.brainstormContractRef summary and deliveryContext.originalRequest",
+        "scope.included, scope.deferred, scope.excluded, and assumptions",
+        "domainModel capability groups and business flows",
+        "frontendExperience or frontendExperienceDelta when present",
+        "roadmap phases, deferred scope, and known next-phase previews",
+      ],
+      currentPhaseLensRole: "currentPhaseLens identifies the first implementation slice only. Do not choose the initial technology baseline from the current phase scope alone when the full requirement or roadmap implies later product surfaces, persistence scale, app clients, services, integrations, or operational needs.",
+      recommendationRule: "Recommend a stable baseline for the full confirmed delivery/roadmap horizon; explain when the current phase can start small inside that baseline without hiding later known needs.",
+    },
+    userFacingConfirmationProtocol: {
+      mandatorySections: [
+        "Recommendation basis: summarize the full requirement/roadmap signals used, not only the current phase.",
+        "Recommended final baseline: list every core track with selection and short rationale.",
+        "Adjustable technology range: show common examples for every core track so the user knows how to modify the recommendation.",
+        "Reply format: show canonical key=value examples using web, app, backend, persistence, dataAccess, and externalServices.",
+        "Final confirmation rule: if the user changes anything, summarize the final baseline and ask for explicit confirmation before submitting.",
+      ],
+      wordingRules: [
+        "Do not present the recommendation as based only on the first phase or current small implementation slice.",
+        "Do not omit the adjustable technology range.",
+        "Do not present backend options as bare language-only labels when a mainstream framework choice is expected; show language + framework combinations in user-facing examples.",
+        "Do not use db or orm as the primary reply keys; use persistence and dataAccess in the primary examples.",
+        "It is fine to understand db as persistence and orm as dataAccess when the user writes those aliases, but normalize the final candidate to stack.tracks.persistence and stack.tracks.dataAccess.",
+      ],
+    },
     commonOptions: {
       web: {
         label: "Web client",
@@ -256,7 +284,7 @@ function technicalBaselineSelectionGuidance(input: {
       },
       backend: {
         label: "Backend / service",
-        examples: ["Next.js server capabilities (Server Actions / Route Handlers / SSR)", "Node.js (Fastify / Express / NestJS)", "Python (FastAPI / Django)", "Java (Spring Boot)", "Go", ".NET", "No independent backend"],
+        examples: ["Next.js + Server Actions / Route Handlers / SSR", "Node.js + Fastify", "Node.js + Express", "Node.js + NestJS", "Python + FastAPI", "Python + Django", "Java + Spring Boot", "Go + net/http or Gin", ".NET + ASP.NET Core", "No independent backend"],
       },
       persistence: {
         label: "Database / persistence",
@@ -264,12 +292,25 @@ function technicalBaselineSelectionGuidance(input: {
       },
       dataAccess: {
         label: "ORM / data access",
-        examples: ["Prisma", "Drizzle", "TypeORM", "SQLAlchemy", "Django ORM", "Spring Data JPA", "Entity Framework", "Raw SQL / lightweight wrapper", "No ORM"],
+        examples: ["Prisma", "Drizzle", "TypeORM", "SQLAlchemy", "Django ORM", "Spring Data JPA", "MyBatis Plus", "Entity Framework", "Raw SQL / lightweight wrapper", "No ORM"],
       },
       externalServices: {
         label: "External services",
         examples: ["None", "User specified", "Only recommend services explicitly required by the confirmed requirement"],
       },
+    },
+    shorthandNormalization: {
+      backend: [
+        "If the user writes backend=Java without a framework, normalize it to Java + Spring Boot unless they explicitly name a different Java backend stack.",
+        "If the user writes backend=Python without a framework, normalize it to Python + FastAPI for service/backend work unless the requirement or user explicitly points to Django-style site/admin/content capabilities.",
+        "If the user writes backend=Node.js without a framework, ask for or summarize a concrete Node.js framework choice such as Fastify, Express, or NestJS before final confirmation.",
+        "If the user writes backend=.NET without a framework, normalize it to .NET + ASP.NET Core unless they explicitly name another .NET backend stack.",
+      ],
+      dataAccessCompatibility: [
+        "When backend is Java + Spring Boot and dataAccess is not specified, recommend Spring Data JPA or MyBatis Plus explicitly before final confirmation; do not leave it as generic Java persistence.",
+        "When backend is Python + FastAPI and dataAccess is not specified, recommend SQLAlchemy or SQLModel explicitly before final confirmation.",
+        "When backend is Python + Django and dataAccess is not specified, recommend Django ORM explicitly before final confirmation.",
+      ],
     },
     recommendationPrinciples: [
       "Prefer mainstream, maintainable, community-mature technologies.",
@@ -282,8 +323,8 @@ function technicalBaselineSelectionGuidance(input: {
     ],
     replyProtocolForUser: {
       acceptRecommendation: "确认推荐方案",
-      partialAdjustmentExample: "web=Vue+Vite, backend=Java+Spring Boot, db=PostgreSQL, orm=Spring Data JPA, app=不需要",
-      fullCustomExample: "web=React+Vite, app=React Native+Expo, backend=Fastify, db=SQLite, orm=Prisma, external=不需要",
+      partialAdjustmentExample: "web=Vue+Vite, backend=Java+Spring Boot, persistence=PostgreSQL, dataAccess=Spring Data JPA, app=不需要, externalServices=不需要",
+      fullCustomExample: "web=React+Vite, app=React Native+Expo, backend=Fastify, persistence=SQLite, dataAccess=Prisma, externalServices=不需要",
       finalConfirmationPrompt: "When the user did not directly accept the recommendation, present a final technology baseline summary and ask them to reply 确认技术栈 or 修改: ...",
     },
   };
@@ -346,7 +387,7 @@ export async function createTechnicalBaselineRequest(input: CreateTechnicalBasel
     agentAction: agentActionContract({
       actionKind: "generate_candidate",
       instruction: selectionGuidance
-        ? "Generate the final TechnicalBaseline candidate only after the required user technical-baseline confirmation is complete. Write it to outputContract.candidateFile, then run submitCommand exactly."
+        ? "Follow selectionGuidance.userFacingConfirmationProtocol first. Generate the final TechnicalBaseline candidate only after the required user technical-baseline confirmation is complete. Write it to outputContract.candidateFile, then run submitCommand exactly."
         : "Generate one TechnicalBaseline candidate from this request, write it to outputContract.candidateFile, then run submitCommand exactly.",
       read: {
         required: ["this request", "referencedArtifactReadGuide", "contextRefs.brainstormContractRef", ...requiredContextReadFields, ...selectionGuidanceReadFields, "currentPhaseLens", "decisionNeeds", "constraints", "enumRefs", "outputContract.schemaShape"],
@@ -432,6 +473,8 @@ export async function createTechnicalBaselineRequest(input: CreateTechnicalBasel
       technicalBaselineSourceRules: [
         ...(projectKind === "greenfield" ? [
           "For greenfield, read selectionGuidance. The CLI provides materials, examples, and confirmation rules only; you must understand the requirement, recommend the concrete technology baseline, and complete any user confirmation dialogue yourself before submitting a confirmed candidate.",
+          "For the first greenfield baseline, base the recommendation on the complete BrainstormContract product scope and roadmap/deferred scope, not only on currentPhaseLens. currentPhaseLens is only the first implementation slice.",
+          "Before asking the user to confirm, show the required user-facing sections from selectionGuidance.userFacingConfirmationProtocol: recommendation basis, recommended tracks, adjustable technology range, canonical reply format, and final confirmation rule.",
           "Do not submit a greenfield TechnicalBaseline candidate until the user explicitly confirms the final technology baseline. Intermediate recommendation/adjustment rounds stay in the chat and are not CLI interactions.",
           "Testing, build, local run, and deployment preparation are derived later by AAC runtime_delivery, TaskPlan, TaskExecution, and deploy; do not ask the user to choose them as first-screen technology tracks unless the user volunteers a preference.",
         ] : []),
@@ -1149,7 +1192,7 @@ export async function createPlanningContract(input: CreatePlanningContractInput)
         "RepositoryContext must not be treated as current phase scope or acceptance coverage.",
         "Concept refs are confirmed Brainstorm semantic facts. CLI validates refs only; Agent performs semantic use.",
         "Frontend experience refs are user-confirmed product targets. AAC may engineer them but must not downgrade or override them without user decision.",
-        "PGC mechanically preserves Brainstorm current-phase detail fields; do not summarize away phaseScope.*.items, phaseScope.acceptanceCandidates[].sourceRefs/capabilityRefs, planningInputs.businessFlows[].summary, concept refs, or frontend refs.",
+        "PGC mechanically preserves Brainstorm current-phase detail fields; do not summarize away phaseScope.*.items, phaseScope.acceptanceCandidates[].sourceRefs/capabilityRefs, planningInputs.businessFlows[].summary, concept refs, frontend refs, or frontend operation path details carried by those frontend refs.",
       ],
     } : {}),
     technicalBaseline: {
@@ -1164,6 +1207,8 @@ export async function createPlanningContract(input: CreatePlanningContractInput)
       actors: brainstorm.domainModel.actors,
       capabilityGroups: brainstorm.domainModel.capabilityGroups,
       businessFlows: brainstorm.domainModel.businessFlows,
+      frontendExperience: brainstorm.frontendExperience ?? null,
+      frontendExperienceDelta: brainstorm.frontendExperienceDelta ?? null,
       sourceRefs: brainstorm.sources.map((source) => source.sourceId),
       contextNotes: ["Brainstorm contract 已确认当前阶段范围。"],
     },
@@ -1407,8 +1452,8 @@ export async function createArchitectureRequest(input: CreateArchitectureRequest
           "Every generated acceptanceRefs[] value and coverage acceptanceId must be selected exactly from allowedRefs.acceptanceRefs; if no allowed acceptance ref applies, write [] or block instead of inventing AC ids.",
           "Every deferredRef must be selected exactly from allowedRefs.deferredScopeRefs and every excludedRef must be selected exactly from allowedRefs.excludedScopeRefs.",
           "Do not probe guessed jq paths. Use fieldAccessHints and agentAction.read/write when locating request fields.",
-          "Use contextProjection.requirementDetailTransfer and sourceRefs.planningContractRef as the current phase requirement-detail authority. Do not drop phaseScope.*.items, acceptance sourceRefs/capabilityRefs, planningInputs.businessFlows summaries, concept refs, or frontend refs while generating AAC sections.",
-          "For frontend_experience, read frontendExperienceSource and write frontendExperience.sourceRefs.brainstormFrontendExperienceRef from confirmedFrontendExperienceRef or currentFrontendExperienceRef when present.",
+          "Use contextProjection.requirementDetailTransfer and sourceRefs.planningContractRef as the current phase requirement-detail authority. Do not drop phaseScope.*.items, acceptance sourceRefs/capabilityRefs, planningInputs.businessFlows summaries, concept refs, frontend refs, or frontendExperienceDetails while generating AAC sections.",
+          "For frontend_experience, read contextProjection.requirementDetailTransfer.frontendExperienceDetails and frontendExperienceSource, then write frontendExperience.sourceRefs.brainstormFrontendExperienceRef from confirmedFrontendExperienceRef or currentFrontendExperienceRef when present.",
           "For runtime_delivery with runtimeDelivery.status=unchanged, set basis.previousRuntimeDeliveryRef exactly to sourceRefs.previousRuntimeDeliveryRef. If that source ref is absent, do not write status=unchanged; write status=modified or blocked based on the current phase facts.",
           "Do not assemble or write final aac.json.",
           "Do not use source code schemas; this request is the schema authority.",
@@ -1453,17 +1498,20 @@ export async function createArchitectureRequest(input: CreateArchitectureRequest
       sourceRefs: "Use .sourceRefs for source contract refs.",
       previousRuntimeDeliveryRef: "Use .sourceRefs.previousRuntimeDeliveryRef as the only valid value for runtimeDelivery.basis.previousRuntimeDeliveryRef when runtimeDelivery.status=unchanged. Do not invent or derive a different previous runtime ref.",
       frontendExperienceSource: "Use .frontendExperienceSource to locate the user-confirmed frontend target before generating frontend_experience.",
-      requirementDetailTransfer: "Use .contextProjection.requirementDetailTransfer plus sourceRefs.planningContractRef to preserve Brainstorm-confirmed current phase details: phaseScope.included/deferred/excluded items, acceptance statement/sourceRefs/capabilityRefs, planningInputs.businessFlows summaries, concept refs, and frontend refs.",
+      requirementDetailTransfer: "Use .contextProjection.requirementDetailTransfer plus sourceRefs.planningContractRef to preserve Brainstorm-confirmed current phase details: phaseScope.included/deferred/excluded items, acceptance statement/sourceRefs/capabilityRefs, planningInputs.businessFlows summaries, concept refs, frontend refs, and frontend operation path details from frontendExperienceDetails.",
       planningContractDetailSelectors: [
         ".phaseScope.included[].items",
         ".phaseScope.deferred[].items",
         ".phaseScope.excluded[].items",
         ".phaseScope.acceptanceCandidates[] | {id,statement,priority,sourceRefs,capabilityRefs}",
         ".planningInputs.businessFlows[].summary",
+        ".planningInputs.frontendExperience.dataViews/actions/operationPaths",
+        ".planningInputs.frontendExperienceDelta.dataViewDeltas/actionDeltas/operationPathDeltas",
         ".contextRefs.phaseConceptGroundingRef",
         ".contextRefs.deliveryConceptGlossaryRef",
         ".contextRefs.confirmedFrontendExperienceRef",
         ".contextRefs.currentFrontendExperienceRef",
+        "confirmed/current frontend experience ref .dataViews/.actions/.operationPaths when present",
       ],
       sectionOutputs: "Use .outputContract.sectionOutputs for section outputs.",
       targetSection: "Use agentAction.write.currentTarget plus instruction.targetSection and instruction.targetCandidateFile. currentTarget is refreshed by loom continue for the active missing section.",
@@ -1498,8 +1546,10 @@ export async function createArchitectureRequest(input: CreateArchitectureRequest
           "planningContractRef.phaseScope.included[].items",
           "planningContractRef.phaseScope.acceptanceCandidates[].statement/sourceRefs/capabilityRefs",
           "planningContractRef.planningInputs.businessFlows[].summary",
+          "planningContractRef.planningInputs.frontendExperience.dataViews/actions/operationPaths",
+          "planningContractRef.planningInputs.frontendExperienceDelta.dataViewDeltas/actionDeltas/operationPathDeltas",
           "planningContractRef.contextRefs.phaseConceptGroundingRef",
-          "planningContractRef.contextRefs.confirmedFrontendExperienceRef/currentFrontendExperienceRef",
+          "planningContractRef.contextRefs.confirmedFrontendExperienceRef/currentFrontendExperienceRef and the referenced frontend experience .dataViews/.actions/.operationPaths when present",
         ],
       },
       singleSectionRouting: "For auto-runnable ArchitectureSections instructions with targetSection, write only targetCandidateFile, then immediately run loom continue before any chat summary.",
@@ -2135,11 +2185,6 @@ function buildArchitectureRepairRequest(
     targetCandidateFile: targetOutput?.candidateFile ?? null,
     targetSchemaRef: targetOutput?.schemaRef ?? null,
     targetGenerationRules: targetOutput?.generationRules ?? [],
-    sectionOutputs: sectionOutputs.map((output) => ({
-      section: output.section,
-      candidateFile: output.candidateFile,
-      schemaRef: output.schemaRef,
-    })),
     issues: issues.map(compactContractIssue),
     issueSpecificRepairRules: architectureRepairRulesForIssues(issues),
     repairPolicy: {
@@ -2329,7 +2374,7 @@ function architectureSectionGenerationRules(rules: string[] = []): string[] {
   return [
     ...architectureAllowedRefGenerationRules(),
     "Use request.contextProjection.requirementDetailTransfer as the current phase requirement-detail transfer contract, and sourceRefs.planningContractRef as the full authority when more detail is needed.",
-    "Do not collapse PGC phaseScope items, acceptance statement/sourceRefs/capabilityRefs, business flow summaries, concept refs, or frontend refs into generic module labels.",
+    "Do not collapse PGC phaseScope items, acceptance statement/sourceRefs/capabilityRefs, business flow summaries, concept refs, object field sets, operation rules, state changes, blocking reasons, or frontend refs into generic module labels.",
     ...rules,
   ];
 }
@@ -2366,6 +2411,37 @@ function requirementDetailTransferProjection(pgc: PlanningGenerationContract): R
       sourceRefs: item.sourceRefs ?? [],
     })),
     businessFlowDetails: pgc.planningInputs.businessFlows,
+    objectOperationDetailRules: {
+      sourceFields: [
+        "currentPhaseScope.included[].items",
+        "acceptanceDetails[].statement",
+        "businessFlowDetails[].summary",
+        "conceptRefs.phaseConceptGroundingRef",
+        "frontendExperienceDetails when UI applies",
+      ],
+      scopeCoverageRule: "Every currentPhaseScope.included item should remain traceable through AAC coverage: represented by domain_contract, behavior, frontend_experience, coverage, or an explicit unresolved/deferred reason. Do not preserve only the items that look easiest to implement.",
+      preservationRule: "Treat Brainstorm-confirmed business objects, key field sets, object operations, operation inputs, preconditions, validation/blocking reasons, success state changes, and visible feedback as current-phase requirement details that AAC sections must preserve.",
+      sectionMapping: {
+        domain_contract: "Represent business objects as entities or reference projections; represent key field sets as entity fields, interface schemas, constraints, relationships, and data rules.",
+        behavior: "Represent object operations as userFlows/stateMachines with preconditions, guards, blocking reasons, effects, success state changes, and feedback.",
+        frontend_experience: "Represent object operation paths as data views, actions, operation paths, visible states, and refresh/readback expectations when UI applies.",
+        coverage: "Map acceptance statements to the AAC artifacts that carry the object, field, operation, state, blocking, and feedback details.",
+      },
+      insufficientDetailRule: "If Brainstorm/PGC confirms a required scope item or object-operation detail but no AAC artifact can represent it, write blocked output for the affected section rather than silently omitting the detail.",
+    },
+    frontendExperienceDetails: {
+      frontendExperience: pgc.planningInputs.frontendExperience ?? null,
+      frontendExperienceDelta: pgc.planningInputs.frontendExperienceDelta ?? null,
+      operationPathSelectors: [
+        "planningContractRef.planningInputs.frontendExperience.dataViews",
+        "planningContractRef.planningInputs.frontendExperience.actions",
+        "planningContractRef.planningInputs.frontendExperience.operationPaths",
+        "planningContractRef.planningInputs.frontendExperienceDelta.dataViewDeltas",
+        "planningContractRef.planningInputs.frontendExperienceDelta.actionDeltas",
+        "planningContractRef.planningInputs.frontendExperienceDelta.operationPathDeltas",
+      ],
+      usageRule: "Use these Brainstorm-confirmed frontend operation path details when generating AAC frontend_experience. If null, read frontendExperienceSource refs when present.",
+    },
     conceptRefs: {
       deliveryConceptGlossaryRef: pgc.contextRefs?.deliveryConceptGlossaryRef ?? null,
       phaseConceptGroundingRef: pgc.contextRefs?.phaseConceptGroundingRef ?? null,
@@ -2375,10 +2451,10 @@ function requirementDetailTransferProjection(pgc: PlanningGenerationContract): R
       currentFrontendExperienceRef: pgc.contextRefs?.currentFrontendExperienceRef ?? null,
     },
     consumeInSections: {
-      domain_contract: "Represent fields, entities, relationships, constraints, request/response/error schemas, and interface rules from PGC scope items, acceptance details, and business flow summaries.",
-      behavior: "Represent flow steps, preconditions, validation/blocking rules, blocking reasons, outcomes, state changes, guards, and effects from PGC business flow and acceptance details.",
-      frontend_experience: "Represent required input, display, feedback, navigation, and interaction expectations from PGC details and frontend refs.",
-      coverage: "Map each acceptance detail to current AAC artifacts and verification hints without dropping rule, field, state, or source-ref context.",
+      domain_contract: "Represent fields, entities, relationships, constraints, request/response/error schemas, and interface rules from PGC scope items, acceptance details, business flow summaries, and objectOperationDetailRules.",
+      behavior: "Represent object operations, flow steps, preconditions, validation/blocking rules, blocking reasons, outcomes, state changes, guards, effects, and visible feedback from PGC business flow and acceptance details.",
+      frontend_experience: "Represent required input, display, feedback, navigation, target discovery/selection, action entry, refresh policy, and operation path expectations from PGC frontendExperienceDetails and frontend refs.",
+      coverage: "Map each acceptance detail and confirmed scope item to current AAC artifacts and verification hints without dropping rule, field, state, unresolved-note, or source-ref context.",
     },
   };
 }
@@ -2397,6 +2473,7 @@ function architectureEnumRefs(): Record<string, string[]> {
     entityType: ["internal", "external", "derived", "value_object"],
     implementationIntent: ["full", "reference_only", "read_only_projection", "external_dependency"],
     interfaceType: ["http_api", "service_method", "component", "cli_command", "event", "job", "external_adapter"],
+    interfaceRole: ["read_model", "command", "readback", "component_binding", "external_contract", "unknown"],
     httpMethod: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     userFlowKind: ["user_interaction", "service_flow", "cli_flow", "scheduled_flow", "system_flow"],
     userFlowEntryType: ["page", "api", "command", "event", "job", "manual", "unknown"],
@@ -2569,6 +2646,7 @@ function domainContractSectionContentShape(): Record<string, unknown> {
       interfaceId: "interface-id",
       name: "interfaceName",
       type: "http_api | service_method | component | cli_command | event | job | external_adapter",
+      role: "read_model | command | readback | component_binding | external_contract | unknown",
       moduleRefs: ["module-id-from-foundation"],
       entityRefs: ["entity-id"],
       scopeRefs: ["scope-ref-from-allowedRefs.scopeRefs"],
@@ -2585,8 +2663,13 @@ function domainContractSectionContentShape(): Record<string, unknown> {
 function domainContractSectionGenerationRules(): string[] {
   return [
     "This phase's AAC must be self-contained for later TaskPlan/TaskExecution refs.",
-    "Use request.contextProjection.requirementDetailTransfer.currentPhaseScope.included[].items, acceptanceDetails, and businessFlowDetails as the current phase domain-detail source.",
+    "Use request.contextProjection.requirementDetailTransfer.currentPhaseScope.included[].items, acceptanceDetails, businessFlowDetails, and objectOperationDetailRules as the current phase domain-detail source.",
     "When PGC details name required fields, validation rules, blocking reasons, status values, source-grounded business constraints, or API data that frontend/backend tasks must share, represent them in content.dataModel.entities[].fields, entity/global constraints, interfaces requestSchema/responseSchema/errorSchema, and relationships as appropriate.",
+    "When Brainstorm/PGC details name key field sets, preserve the fields as identity/input/display/relationship/status/result-feedback responsibilities in entities, constraints, relationships, interfaces, or assumptions. Do not leave them only as prose module notes.",
+    "When Brainstorm/PGC details name operations on an object, make the domain artifacts sufficient for behavior and task planning: identify the entities, field schemas, constraints, and interface data needed by each operation.",
+    "For user-facing workflows, design interfaces around the workflow/surface responsibilities rather than only module labels: read_model interfaces load/query/select target data, command interfaces submit user actions, and readback interfaces refresh the result or status after the action when needed.",
+    "When frontendExperienceDetails or frontendExperience operation paths declare dataViews/actions/operationPaths, map them to interface roles where applicable: dataViews usually need read_model or component_binding, actions usually need command, and post-action refresh/status observation may need readback. If the phase is backend-only or UI is intentionally deferred, state that through interface roles and behavior instead of inventing frontend consumers.",
+    "Each interface should expose the request, response, and error fields needed by the workflow step or operation path it supports. Do not collapse a list/query/readback protocol into a single vague service interface when the current phase needs user-visible data selection or refreshed state.",
     "Do not replace detailed PGC rules or field lists with generic phrases; carry the concrete details available in PGC into this section.",
     "If the current phase uses an entity that was created in an earlier phase or already exists in the repository, include it in content.dataModel.entities for this current section with implementationIntent=reference_only or read_only_projection unless this phase owns changing the entity shape.",
     "Do not reference an earlier phase AAC entity id from interfaces, relationships, constraints, behavior, or coverage unless that entity id is explicitly listed in this current domain_contract section.",
@@ -2674,8 +2757,9 @@ function behaviorSectionContentShape(): Record<string, unknown> {
 
 function behaviorSectionGenerationRules(): string[] {
   return [
-    "Use request.contextProjection.requirementDetailTransfer.businessFlowDetails and acceptanceDetails as the current phase behavior-detail source.",
-    "For each applicable current phase flow, represent trigger/action steps, preconditions, validation or blocking rules, blocking reasons, success outcomes, state changes, guards, effects, and user/system feedback in content.userFlows and content.stateMachines.",
+    "Use request.contextProjection.requirementDetailTransfer.businessFlowDetails, acceptanceDetails, and objectOperationDetailRules as the current phase behavior-detail source.",
+    "For each applicable current phase object operation, represent trigger/action steps, operation inputs, preconditions, validation or blocking rules, blocking reasons, success outcomes, state changes, guards, effects, and user/system feedback in content.userFlows and content.stateMachines.",
+    "If a confirmed operation has blocking reasons or state changes, do not model it only as a happy-path userFlow; include guards/effects/rules that TaskPlan can assign and Review can verify.",
     "If PGC says a flow is not applicable because the phase is non-domain technical work, express the technical workflow instead of fabricating business states.",
     "Use only artifact ids declared in the current request's accepted/created section candidates.",
     "Every userFlows[].entityRefs and stateMachines[].entityRefs value must come from the current domain_contract.content.dataModel.entities[].entityId.",
@@ -2714,6 +2798,50 @@ function frontendExperienceSectionContentShape(): Record<string, unknown> {
         workflowRefs: ["flow-id-from-behavior"],
         moduleRefs: ["module-id-from-foundation"],
       }],
+      dataViews: [{
+        viewId: "view-id",
+        name: "Result list, detail, form, or dashboard name",
+        purpose: "How the view helps the user find, inspect, or operate on the target object.",
+        targetObject: "Business object users operate on, when applicable.",
+        selectionMode: "query_and_select | direct_id_lookup | preselected_context | not_applicable",
+        paginationRequired: true,
+        defaultLoadsFirstPage: true,
+        searchCriteria: [{
+          criterionId: "criterion-id",
+          label: "User-facing query condition grounded in confirmed fields.",
+          fieldRef: "optional dataModel field/entity ref",
+          reason: "Why this criterion is useful for the current operation path.",
+          sourceRefs: ["brainstorm-or-pgc-source-ref"],
+        }],
+        criteriaUnclearNote: "Use only when confirmed fields are insufficient for advanced filters.",
+        sourceRefs: ["brainstorm-or-pgc-source-ref"],
+      }],
+      actions: [{
+        actionId: "action-id",
+        label: "User-facing action label",
+        targetObject: "Business object acted on, when applicable.",
+        entryPoint: "result_row_action | detail_button | form_submit | bulk_action | inline_action | navigation_entry",
+        inputFields: ["Confirmed input/display/pass-through field name or ref."],
+        resultObservation: ["list_refresh", "detail_refresh", "inline_status_update", "response_message", "not_applicable"],
+        refreshPolicy: "refresh_current_query | refresh_detail | update_inline_state | show_message_only | not_applicable",
+        successFeedback: ["Visible success message, row/detail refresh, or status change."],
+        blockingOrErrorFeedback: ["Visible business blocking reason, validation message, or error state."],
+        sourceRefs: ["brainstorm-or-pgc-source-ref"],
+      }],
+      operationPaths: [{
+        pathId: "path-id",
+        name: "Operation path name",
+        userGoal: "What the user is trying to complete.",
+        surfaceRef: "surface-id",
+        workflowRef: "flow-id-from-behavior",
+        targetObject: "Business object users operate on, when applicable.",
+        selectionMode: "query_and_select | direct_id_lookup | preselected_context | not_applicable",
+        selectionSummary: "Natural-language path such as query list -> select record -> trigger action -> observe refreshed result.",
+        dataViewRefs: ["view-id"],
+        actionRefs: ["action-id"],
+        requiredStates: ["idle", "loading", "success", "error", "empty", "business_blocking"],
+        sourceRefs: ["brainstorm-or-pgc-source-ref"],
+      }],
       navigation: {
         required: true,
         pattern: "tabs | sidebar | top_nav | segmented_control | none",
@@ -2722,7 +2850,7 @@ function frontendExperienceSectionContentShape(): Record<string, unknown> {
           targetSurfaceRef: "surface-id",
         }],
       },
-      interactionStates: ["idle", "loading", "success", "error", "empty"],
+      interactionStates: ["idle", "loading", "success", "error", "empty", "business_blocking"],
       mustNot: [
         "Do not implement a usable_internal_product as one linear stack of naked forms.",
         "Do not use phase labels as product navigation.",
@@ -3111,6 +3239,8 @@ function architectureSectionOutputs(
         "Read request.frontendExperienceSource before writing this section.",
         "Use request.contextProjection.requirementDetailTransfer and PGC frontend refs to preserve current phase input, display, feedback, and workflow expectations confirmed in Brainstorm.",
         "When PGC details name user-facing fields, statuses, blocking feedback, required workflow surfaces, or frontend/backend interaction expectations, represent them in surfaces, navigation, interactionStates, notes, and mustNot as appropriate.",
+        "When Brainstorm frontendExperience contains dataViews, actions, or operationPaths, preserve the current phase relevant entries in content.frontendExperience.dataViews/actions/operationPaths and connect them to userFlows where possible.",
+        "For existing-object operation paths, prefer a paginated query/select view unless the confirmed frontend target says direct id entry, preselected context, or not applicable. Do not invent search criteria beyond confirmed fields.",
         "If frontendExperienceSource.confirmedFrontendExperienceRef or currentFrontendExperienceRef is present, include content.frontendExperience and set content.frontendExperience.sourceRefs.brainstormFrontendExperienceRef to that exact ref.",
         "If frontendExperienceSource.repositoryContextRef is null or absent, omit content.frontendExperience.sourceRefs.repositoryContextRef; do not write null for optional source refs.",
         "Use RepositoryContext and TechnicalBaseline only as implementation facts; do not downgrade the user-confirmed frontend target.",

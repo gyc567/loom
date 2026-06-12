@@ -474,7 +474,8 @@ function buildTaskExecutionFieldGroups(actionKind: string, requiredFields: strin
     "task.frontendExperienceRequirement.executionGuidance.unresolvedBindingInputs",
   ]);
   pushTakenAvailableGroup(groups, used, actionKind, "frontend_closure_details", false, (field) => hasExplicitFrontendRequirement && hasField(field), [
-    "task.frontendExperienceRequirement.executionGuidance.workflowClosureRequirements",
+    "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
+    "task.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource",
   ]);
   pushTakenAvailableGroup(groups, used, actionKind, "execution_rules", true, hasField, [
     "executionRules.completionBarrier",
@@ -523,7 +524,7 @@ function buildTaskExecutionFieldGroups(actionKind: string, requiredFields: strin
     "outputContract.schemaShape.frontendExperienceSelfCheck.notes",
   ]);
   pushTakenAvailableGroup(groups, used, actionKind, "result_frontend_closure_contract", false, hasField, [
-    "outputContract.schemaShape.frontendExperienceSelfCheck.workflowClosureRequirements",
+    "outputContract.schemaShape.frontendExperienceSelfCheck.closureRequirementIds",
     "outputContract.schemaShape.frontendExperienceSelfCheck.workflowClosureEvidenceRule",
   ]);
   pushTakenAvailableGroup(groups, used, actionKind, "runtime_result_contract", false, hasField, [

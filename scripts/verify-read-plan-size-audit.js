@@ -675,6 +675,7 @@ async function auditTaskPlan() {
         "sourceRefs",
         "contextProjection.requirementDetailTransfer",
         "generationRules.requirementDetailTransferRules",
+        "generationRules.workflowClosureRules.requirementSource",
         "generationRules.workflowClosureRules.taskAssignmentRule",
         "generationRules.workflowClosureRules.taskCoverageShape",
         "generationRules.runtimeDeliveryRules.status",
@@ -699,6 +700,16 @@ async function auditTaskPlan() {
       rulesGroup.fields.includes("generationRules.workflowClosureRules.requirements"),
       false,
       "TaskPlanGenerationRequest: rules group must not duplicate workflow closure requirements",
+    );
+    assert.equal(
+      request.generationRules.workflowClosureRules.requirements,
+      undefined,
+      "TaskPlanGenerationRequest: generationRules must not duplicate workflow closure requirements",
+    );
+    assert.equal(
+      request.outputContract.workflowClosureRequirements,
+      undefined,
+      "TaskPlanGenerationRequest: outputContract must not duplicate workflow closure requirements",
     );
     const optionalGroup = readGroup(request, "generate_taskplan_grouped_optional_context");
     assert.ok(optionalGroup, "TaskPlanGenerationRequest: optional context group must exist");

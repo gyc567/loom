@@ -206,6 +206,7 @@ function createDeferredScopeNonePreviewCandidate(request) {
           "includedDeferredExcludedBoundary",
           "nextPhasePreview",
           "conceptSummary",
+          "businessObjectOperationSummary",
         ],
       },
     },
@@ -245,6 +246,25 @@ function createDeferredScopeNonePreviewCandidate(request) {
       finalSummaryConfirmed: true,
     },
     handoff: { ready: true, nextNode: "technical_baseline_generation", blockingReasons: [] },
+  };
+}
+
+function createDeferredScopeCandidatePreviewCandidate(request) {
+  const candidate = createDeferredScopeNonePreviewCandidate(request);
+  return {
+    ...candidate,
+    candidateId: "brainstorm-candidate-deferred-candidate-preview",
+    phasePlan: {
+      ...candidate.phasePlan,
+      nextPhasePreview: {
+        kind: "candidate",
+        suggestedPhaseId: "phase-3",
+        title: "Deferred next capability",
+        goal: "Confirm and deliver the deferred next capability.",
+        scopePreview: ["Next capability"],
+        reason: "The current confirmed phase explicitly defers this capability.",
+      },
+    },
   };
 }
 
@@ -579,6 +599,25 @@ function main() {
     assert.equal(brainstormRequest.contextRefs.latestRepositoryContextRef, ".loom/deliveries/delivery-preview-candidate/workspace/phase-2/repository-context.json");
     assert.equal(brainstormRequest.phaseContinuationContext.nextPhaseSeed.kind, "candidate");
     assert.equal(Object.hasOwn(brainstormRequest.phaseContinuationContext, "completedPhases"), false);
+    const compactBrainstormRequest = readJson(projectFile(candidateRoot, compactAccepted.instruction.expectedResponse.requestRef));
+    writeJson(projectFile(candidateRoot, compactAccepted.instruction.expectedResponse.candidateFile), createDeferredScopeCandidatePreviewCandidate(compactBrainstormRequest));
+    const acceptedBrainstorm = run([
+      "brainstorm", "accept",
+      "--delivery-id", "delivery-preview-candidate",
+      "--phase-id", "phase-2",
+      "--run-id", compactBrainstormRequest.brainstormRunId,
+      "--request-id", compactBrainstormRequest.requestId,
+      "--candidate-file", compactAccepted.instruction.expectedResponse.candidateFile,
+    ], candidateRoot);
+    assert.equal(acceptedBrainstorm.accepted, true, JSON.stringify(acceptedBrainstorm, null, 2));
+    const acceptedContract = readJson(projectFile(candidateRoot, acceptedBrainstorm.contractPath));
+    assert.equal(acceptedContract.deliveryStrategy.mode, "roadmap");
+    assert.equal(acceptedContract.phasePlan.nextPhasePreview.kind, "candidate");
+    assert.deepEqual(
+      acceptedContract.roadmap.phases.map((phase) => phase.phaseId),
+      ["phase-1", "phase-2"],
+      "Only prior phases and the active confirmed phase should be preserved; generic future placeholders must not be reintroduced.",
+    );
   } finally {
     fs.rmSync(candidateRoot, { recursive: true, force: true });
   }

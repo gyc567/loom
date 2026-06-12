@@ -352,9 +352,11 @@ async function verifyTaskPlanRequestProjection() {
     const transferRequirements = request.contextProjection.requirementDetailTransfer.workflowClosureRequirements;
     assert.equal(transferRequirements.length, 1, "TaskPlan request must expose workflow closure requirements in requirementDetailTransfer.");
     assert.equal(transferRequirements[0].closureId, closureRequirement.closureId);
-    assert.equal(request.generationRules.workflowClosureRules.requirements.length, 1, "TaskPlan generationRules must expose workflow closure requirements.");
+    assert.equal(request.generationRules.workflowClosureRules.requirements, undefined, "TaskPlan generationRules must not duplicate full workflow closure requirements.");
+    assert.deepEqual(request.generationRules.workflowClosureRules.requirementSource.closureRequirementIds, [closureRequirement.closureId], "TaskPlan generationRules must expose workflow closure requirement refs.");
     assert.equal(request.generationRules.workflowClosureRules.derivationAuthority, "AAC structure only. No acceptance text, phase title, or business keyword scanning is used.");
-    assert.equal(request.outputContract.workflowClosureRequirements.length, 1, "TaskPlan outputContract must expose workflow closure requirements.");
+    assert.equal(request.outputContract.workflowClosureRequirements, undefined, "TaskPlan outputContract must not duplicate full workflow closure requirements.");
+    assert.deepEqual(request.outputContract.workflowClosureRequirementRefs.closureRequirementIds, [closureRequirement.closureId], "TaskPlan outputContract must expose workflow closure requirement refs.");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -476,7 +478,7 @@ const closureTask = taskBase({
     experienceLevel: "usable_internal_product",
     mustSatisfy: ["workflow closure uses wired data binding"],
     executionGuidance: {
-      workflowClosureRequirements: [closureRequirement],
+      closureRequirementRefs: [closureRequirement],
     },
   },
 });

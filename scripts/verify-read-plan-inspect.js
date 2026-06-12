@@ -83,7 +83,8 @@ const action = agentActionContract({
     optional: [
       "sourceRefs",
       "sourceRefs.taskPlanRef",
-      "task.frontendExperienceRequirement.executionGuidance.workflowClosureRequirements",
+      "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
+      "task.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource",
       "task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings",
       "outputContract.schemaShape.frontendExperienceSelfCheck.requirementRef",
       "outputContract.schemaShape.frontendExperienceSelfCheck.status",
@@ -94,7 +95,7 @@ const action = agentActionContract({
       "outputContract.schemaShape.frontendExperienceSelfCheck.dataBinding",
       "outputContract.schemaShape.frontendExperienceSelfCheck.knownGaps",
       "outputContract.schemaShape.frontendExperienceSelfCheck.notes",
-      "outputContract.schemaShape.frontendExperienceSelfCheck.workflowClosureRequirements",
+      "outputContract.schemaShape.frontendExperienceSelfCheck.closureRequirementIds",
       "outputContract.schemaShape.frontendExperienceSelfCheck.workflowClosureEvidenceRule",
       "outputContract.schemaShape.runtimeDeliveryEvidence",
       "task.runtimeDeliveryRequirement",
@@ -172,14 +173,19 @@ assert.equal(
   "TaskExecution readPlan must keep frontendBackendBindings available.",
 );
 assert.equal(
-  frontendGuidanceGroup.fields.includes("task.frontendExperienceRequirement.executionGuidance.workflowClosureRequirements"),
+  frontendGuidanceGroup.fields.includes("task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs"),
   false,
-  "TaskExecution frontend_guidance must not default-read full workflowClosureRequirements.",
+  "TaskExecution frontend_guidance must not default-read workflow closure refs.",
 );
 assert.equal(
-  frontendClosureDetailsGroup.fields.includes("task.frontendExperienceRequirement.executionGuidance.workflowClosureRequirements"),
+  frontendClosureDetailsGroup.fields.includes("task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs"),
   true,
-  "TaskExecution must keep workflowClosureRequirements available in an on-demand group.",
+  "TaskExecution must keep closureRequirementRefs available in an on-demand group.",
+);
+assert.equal(
+  frontendClosureDetailsGroup.fields.includes("task.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource"),
+  true,
+  "TaskExecution must keep workflowClosureDetailSource available in an on-demand group.",
 );
 assert.equal(
   resultContractGroup.fields.includes("outputContract.schemaShape.frontendExperienceSelfCheck"),

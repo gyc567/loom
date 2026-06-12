@@ -74,6 +74,14 @@ import {
   type WorkflowClosureRequirement,
 } from "../workflow-closure";
 
+const TASKPLAN_WORKFLOW_CLOSURE_REQUIREMENTS_SOURCE_PATH = "contextProjection.requirementDetailTransfer.workflowClosureRequirements";
+const TASK_EXECUTION_WORKFLOW_CLOSURE_DETAIL_SOURCES = [
+  "sourceRefs.architectureArtifactContractRef#/frontendExperience",
+  "sourceRefs.architectureArtifactContractRef#/userFlows",
+  "sourceRefs.architectureArtifactContractRef#/interfaces",
+  "sourceRefs.architectureArtifactContractRef#/stateMachines",
+];
+
 export type CreateTaskPlanRequestInput = {
   projectRoot: string;
   deliveryId?: string;
@@ -432,6 +440,7 @@ export async function createTaskPlanRequest(input: CreateTaskPlanRequestInput): 
               "generationRules.frontendExperienceRules.required",
               "generationRules.frontendExperienceRules.rules",
               "generationRules.workflowClosureRules.derivationAuthority",
+              "generationRules.workflowClosureRules.requirementSource",
               "generationRules.workflowClosureRules.appliesWhen",
               "generationRules.workflowClosureRules.taskAssignmentRule",
               "generationRules.workflowClosureRules.taskCoverageShape",
@@ -446,7 +455,7 @@ export async function createTaskPlanRequest(input: CreateTaskPlanRequestInput): 
             ],
             readCommand: {
               name: "inspect",
-              argv: ["inspect", "--request", "{requestRef}", "--field", "generationRules.requirementDetailTransferRules,generationRules.groupedOutputRules,generationRules.scopeAndReferenceRules,generationRules.writeBoundaryRules,generationRules.verificationEvidenceRules,generationRules.conceptGroundingRules,generationRules.frontendExperienceRules.required,generationRules.frontendExperienceRules.rules,generationRules.workflowClosureRules.derivationAuthority,generationRules.workflowClosureRules.appliesWhen,generationRules.workflowClosureRules.taskAssignmentRule,generationRules.workflowClosureRules.taskCoverageShape,generationRules.workflowClosureRules.resultExpectation,generationRules.workflowClosureRules.repairRule,generationRules.workflowClosureRules.rules,generationRules.runtimeDeliveryRules.status,generationRules.runtimeDeliveryRules.closureRequirement,generationRules.runtimeDeliveryRules.closureTaskTemplate,generationRules.runtimeDeliveryRules.taskPlanningGuidance,generationRules.runtimeDeliveryRules.rules"],
+              argv: ["inspect", "--request", "{requestRef}", "--field", "generationRules.requirementDetailTransferRules,generationRules.groupedOutputRules,generationRules.scopeAndReferenceRules,generationRules.writeBoundaryRules,generationRules.verificationEvidenceRules,generationRules.conceptGroundingRules,generationRules.frontendExperienceRules.required,generationRules.frontendExperienceRules.rules,generationRules.workflowClosureRules.derivationAuthority,generationRules.workflowClosureRules.requirementSource,generationRules.workflowClosureRules.appliesWhen,generationRules.workflowClosureRules.taskAssignmentRule,generationRules.workflowClosureRules.taskCoverageShape,generationRules.workflowClosureRules.resultExpectation,generationRules.workflowClosureRules.repairRule,generationRules.workflowClosureRules.rules,generationRules.runtimeDeliveryRules.status,generationRules.runtimeDeliveryRules.closureRequirement,generationRules.runtimeDeliveryRules.closureTaskTemplate,generationRules.runtimeDeliveryRules.taskPlanningGuidance,generationRules.runtimeDeliveryRules.rules"],
             },
             fallbackRule: "If grouped inspect fails, read only these generationRules subfields. Do not read the whole generationRules object.",
           },
@@ -569,19 +578,23 @@ export async function createTaskPlanRequest(input: CreateTaskPlanRequestInput): 
         ".contextProjection.requirementDetailTransfer.currentPhaseScope.included[].items",
         ".contextProjection.requirementDetailTransfer.acceptanceDetails[]",
         ".contextProjection.requirementDetailTransfer.businessFlowDetails[]",
+        ".contextProjection.requirementDetailTransfer.objectOperationDetailRules",
         ".contextProjection.requirementDetailTransfer.workflowClosureRequirements[]",
         ".contextProjection.requirementDetailTransfer.architectureDetails",
+        ".contextProjection.requirementDetailTransfer.architectureDetails.frontendOperationPathDetails",
         ".contextProjection.requirementDetailTransfer.taskPlanningFieldMapping",
       ],
       compactJqExamples: [
         ".sourceRefs",
         ".contextProjection.requirementDetailTransfer.acceptanceDetails[] | {id,statement,sourceRefs,capabilityRefs,aacCoverage}",
+        ".contextProjection.requirementDetailTransfer.objectOperationDetailRules | {scopeCoverageRule,taskAssignmentRule,conceptBindingRule,evidenceRule}",
         ".contextProjection.requirementDetailTransfer.architectureDetails | {modules,interfaces,userFlows}",
+        ".contextProjection.requirementDetailTransfer.architectureDetails.frontendOperationPathDetails | {dataViews,actions,operationPaths}",
         ".contextProjection.requirementDetailTransfer.workflowClosureRequirements[] | {closureId,workflowRef,interfaceRefs,acceptanceRefs,requiredDataBindingMode,requiredEvidence}",
         ".sourceRefs.phaseConceptGroundingRef",
         ".referencedArtifactReadGuide[] | select(.refKey == \"phaseConceptGroundingRef\")",
         ".generationRules.conceptGroundingRules",
-        ".generationRules.workflowClosureRules | {derivationAuthority,appliesWhen,taskAssignmentRule,taskCoverageShape,resultExpectation,repairRule,rules}",
+        ".generationRules.workflowClosureRules | {derivationAuthority,requirementSource,appliesWhen,taskAssignmentRule,taskCoverageShape,resultExpectation,repairRule,rules}",
         ".outputContract.runtimeDeliveryClosureTaskTemplate.runtimeDeliveryRequirement",
         ".outputContract | {outlineFile,groupFilePattern}",
       ],
@@ -634,7 +647,10 @@ export async function createTaskPlanRequest(input: CreateTaskPlanRequestInput): 
       outlineSchemaShape: taskPlanOutlineSchemaShape(locator, requestId, pgc, aac),
       groupSchemaShape: taskPlanGroupSchemaShape(locator, requestId, aac),
       frontendExperienceProjection: aac.frontendExperience ?? null,
-      workflowClosureRequirements: buildWorkflowClosureRequirements(aac),
+      workflowClosureRequirementRefs: workflowClosureRequirementSourceSummary(buildWorkflowClosureRequirements(aac), {
+        sourcePath: TASKPLAN_WORKFLOW_CLOSURE_REQUIREMENTS_SOURCE_PATH,
+        phase: "taskplan_generation",
+      }),
       runtimeDeliveryProjection: runtimeDeliveryProjection(aac),
       runtimeDeliveryClosureRequirement: runtimeDeliveryClosureRequirement(aac),
       runtimeDeliveryClosureTaskTemplate: runtimeDeliveryClosureTaskTemplate(aac),
@@ -1691,7 +1707,8 @@ function taskResultRepairInspectFields(issues: ContractIssue[]): string[] {
       fields.add("outputContract.schemaShape.frontendExperienceSelfCheck.status");
       fields.add("outputContract.schemaShape.frontendExperienceSelfCheck.dataBinding");
       fields.add("outputContract.schemaShape.frontendExperienceSelfCheck.knownGaps");
-      fields.add("task.frontendExperienceRequirement.executionGuidance.workflowClosureRequirements");
+      fields.add("task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs");
+      fields.add("task.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource");
     }
     if (issue.code === "TASK_RESULT_RUNTIME_CHECK_ID_INVALID") {
       fields.add("outputContract.schemaShape.runtimeDeliveryEvidence");
@@ -2097,7 +2114,7 @@ function buildTaskAcceptanceSnapshot(
         reason: aacCoverage.reason ?? null,
         reasonCategory: aacCoverage.reasonCategory ?? null,
       } : null,
-      taskResponsibilityRule: "Use this combined PGC acceptance detail and AAC coverage when implementing task objective, verificationResults, and any frontend/runtime evidence.",
+      taskResponsibilityRule: "Use this combined PGC acceptance detail and AAC coverage when implementing task objective, verificationResults, conceptEvidence, frontend/runtime evidence, and object-operation behavior. If the statement names fields, rules, states, blocking reasons, or feedback, TaskResult evidence must address them.",
     };
   });
 }
@@ -2130,6 +2147,7 @@ function frontendBindingInterfaceContract(contract: ArchitectureArtifactContract
     interfaceId: contract.interfaceId,
     name: contract.name,
     type: contract.type,
+    role: contract.role ?? null,
     moduleRefs: contract.moduleRefs,
     entityRefs: contract.entityRefs,
     scopeRefs: contract.scopeRefs,
@@ -2172,6 +2190,49 @@ function frontendBindingReadToResolve(): string[] {
     "sourceRefs.taskPlanRef#/tasks",
     "project source files",
   ];
+}
+
+function frontendOperationPathProjection(
+  frontendExperience: FrontendExperienceContract,
+  selectedSurfaceIds: Set<string>,
+  workflowRefsInScope: string[],
+  workflowClosureRequirements: WorkflowClosureRequirement[],
+): Record<string, unknown> {
+  const workflowRefSet = new Set(workflowRefsInScope);
+  const closureOperationPathRefs = new Set(workflowClosureRequirements.flatMap((requirement) => requirement.operationPathRefs));
+  const selectedOperationPaths = (frontendExperience.operationPaths ?? []).filter((operationPath) =>
+    closureOperationPathRefs.has(operationPath.pathId) ||
+    (operationPath.workflowRef ? workflowRefSet.has(operationPath.workflowRef) : false) ||
+    (operationPath.surfaceRef ? selectedSurfaceIds.has(operationPath.surfaceRef) : false)
+  );
+  const selectedDataViewRefs = new Set(selectedOperationPaths.flatMap((operationPath) => operationPath.dataViewRefs));
+  const selectedActionRefs = new Set(selectedOperationPaths.flatMap((operationPath) => operationPath.actionRefs));
+  for (const requirement of workflowClosureRequirements) {
+    requirement.dataViewRefs.forEach((ref) => selectedDataViewRefs.add(ref));
+    requirement.actionRefs.forEach((ref) => selectedActionRefs.add(ref));
+  }
+
+  const dataViewsInScope = (frontendExperience.dataViews ?? []).filter((dataView) =>
+    selectedDataViewRefs.has(dataView.viewId) ||
+    selectedOperationPaths.some((operationPath) => operationPath.targetObject && operationPath.targetObject === dataView.targetObject)
+  );
+  const actionsInScope = (frontendExperience.actions ?? []).filter((action) =>
+    selectedActionRefs.has(action.actionId) ||
+    selectedOperationPaths.some((operationPath) => operationPath.targetObject && operationPath.targetObject === action.targetObject)
+  );
+
+  const operationPathWarnings: string[] = [];
+  if ((frontendExperience.operationPaths?.length ?? 0) > 0 && selectedOperationPaths.length === 0) {
+    operationPathWarnings.push("Frontend operation paths exist in AAC but none matched this task's surface/workflow refs; read the full architectureArtifactContractRef if this task still owns UI behavior.");
+  }
+
+  return {
+    dataViewsInScope,
+    actionsInScope,
+    operationPathsInScope: selectedOperationPaths,
+    operationPathEvidenceRule: "When this task touches UI behavior, frontendExperienceSelfCheck should cite the operation paths, data views, actions, and result feedback it implemented or verified. If these projections are empty but the task owns UI behavior, read the full AAC frontendExperience before deciding.",
+    operationPathWarnings,
+  };
 }
 
 function buildFrontendBackendBindingProjection(
@@ -2334,7 +2395,23 @@ function buildFrontendExecutionGuidance(task: Task, aac: ArchitectureArtifactCon
     ...workflowRefsInScope.flatMap((flowRef) => flowById.get(flowRef)?.interfaceRefs ?? []),
   ]);
   const interfaceRefSet = new Set(interfaceRefsInScope);
+  const interfaceById = new Map(aac.interfaces.map((contract) => [contract.interfaceId, contract]));
+  const interfaceRolesInScope = interfaceRefsInScope.map((interfaceRef) => {
+    const contract = interfaceById.get(interfaceRef);
+    return {
+      interfaceRef,
+      role: contract?.role ?? "unknown",
+      method: contract?.method ?? null,
+      path: contract?.path ?? null,
+    };
+  });
   const bindingProjection = buildFrontendBackendBindingProjection(task, aac, frontendExperience, workflowRefsInScope);
+  const operationPathProjection = frontendOperationPathProjection(
+    frontendExperience,
+    selectedSurfaceIds,
+    workflowRefsInScope,
+    workflowClosureRequirements,
+  );
 
   return {
     schemaVersion: "1.0",
@@ -2375,9 +2452,11 @@ function buildFrontendExecutionGuidance(task: Task, aac: ArchitectureArtifactCon
       };
     }),
     interactionStatesExpected: frontendExperience.interactionStates,
+    ...operationPathProjection,
     mustNot: frontendExperience.mustNot,
     dataBindingExpectation: {
       interfacesInScope: interfaceRefsInScope,
+      interfaceRolesInScope,
       allowedModes: ["wired", "mocked_with_reason", "static_only_with_reason", "not_applicable"],
       ...(workflowClosureRequirements.length > 0 ? {
         requiredModeForSatisfaction: "wired",
@@ -2387,7 +2466,8 @@ function buildFrontendExecutionGuidance(task: Task, aac: ArchitectureArtifactCon
       } : {}),
       guidance: "Describe how UI data/actions are wired. Use frontendBackendBindings first when present. If the binding is missing, read AAC/TaskPlan/source before deciding; if still static-only, record it as a known gap instead of claiming full workflow completion.",
     },
-    workflowClosureRequirements: workflowClosureRequirementExecutionView(workflowClosureRequirements),
+    closureRequirementRefs: workflowClosureRequirementExecutionView(workflowClosureRequirements),
+    workflowClosureDetailSource: workflowClosureExecutionDetailSource(workflowClosureRequirements),
     ...bindingProjection,
     taskResultEvidenceGuide: {
       field: "frontendExperienceSelfCheck",
@@ -2411,20 +2491,53 @@ function workflowClosureRequirementExecutionView(requirements: WorkflowClosureRe
     workflowRef: requirement.workflowRef,
     workflowName: requirement.workflowName,
     surfaceRefs: requirement.surfaceRefs,
+    operationPathRefs: requirement.operationPathRefs,
+    dataViewRefs: requirement.dataViewRefs,
+    actionRefs: requirement.actionRefs,
     moduleRefs: requirement.moduleRefs,
     acceptanceRefs: requirement.acceptanceRefs,
     interfaceRefs: requirement.interfaceRefs,
     stateMachineRefs: requirement.stateMachineRefs,
     stepRefs: requirement.stepRefs,
-    entry: requirement.entry,
     requiredDataBindingMode: requirement.requiredDataBindingMode,
-    satisfiedDataBindingModes: requirement.satisfiedDataBindingModes,
-    staticModePolicy: requirement.staticModePolicy,
-    knownGapPolicy: requirement.knownGapPolicy,
     requiredEvidence: requirement.requiredEvidence,
-    interfaces: requirement.interfaces,
-    derivation: requirement.derivation,
+    interfaceRoles: requirement.interfaces.map((contract) => ({
+      interfaceRef: contract.interfaceId,
+      role: contract.role ?? "unknown",
+      type: contract.type,
+      method: contract.method ?? null,
+      path: contract.path ?? null,
+    })),
+    evidenceRule: "Evidence must cover user action, declared interface invocation, state or persistence change, and success or blocking feedback.",
   }));
+}
+
+function workflowClosureRequirementSourceSummary(
+  requirements: WorkflowClosureRequirement[],
+  options: { sourcePath: string; phase: "taskplan_generation" | "task_execution" },
+): Record<string, unknown> {
+  return {
+    sourcePath: options.sourcePath,
+    phase: options.phase,
+    requirementCount: requirements.length,
+    closureRequirementIds: requirements.map((requirement) => requirement.closureId),
+    rule: "Read the sourcePath only when full closure detail is needed. Do not duplicate the full workflow closure payload into generation rules, task guidance, or TaskResult schema.",
+    requiredTaskEvidence: [
+      "user_action",
+      "declared_interface_invocation",
+      "state_or_persistence_change",
+      "success_or_blocking_feedback",
+    ],
+  };
+}
+
+function workflowClosureExecutionDetailSource(requirements: WorkflowClosureRequirement[]): Record<string, unknown> {
+  return {
+    sourcePaths: TASK_EXECUTION_WORKFLOW_CLOSURE_DETAIL_SOURCES,
+    closureRequirementIds: requirements.map((requirement) => requirement.closureId),
+    readWhen: "Read these AAC detail sources only when closureRequirementRefs, frontendBackendBindings, and sourceContext.architectureArtifactProjection are not enough to implement or verify the task.",
+    derivationRule: "Closure refs are derived from AAC frontendExperience surfaces, task userFlows, userFlow steps, and executable interfaces.",
+  };
 }
 
 function workflowClosureRequirementsFromTaskGuidance(task: Task): Array<Record<string, unknown>> {
@@ -2435,6 +2548,20 @@ function workflowClosureRequirementsFromTaskGuidance(task: Task): Array<Record<s
   const guidance = (requirement as Record<string, unknown>).executionGuidance;
   if (!guidance || typeof guidance !== "object" || Array.isArray(guidance)) {
     return [];
+  }
+  const closureRefs = (guidance as Record<string, unknown>).closureRequirementRefs;
+  if (Array.isArray(closureRefs)) {
+    return closureRefs
+      .map((item): Record<string, unknown> | null => {
+        if (typeof item === "string" && item.length > 0) {
+          return { closureId: item };
+        }
+        if (typeof item === "object" && item !== null && !Array.isArray(item)) {
+          return item as Record<string, unknown>;
+        }
+        return null;
+      })
+      .filter((item): item is Record<string, unknown> => item !== null);
   }
   const requirements = (guidance as Record<string, unknown>).workflowClosureRequirements;
   return Array.isArray(requirements)
@@ -2450,12 +2577,13 @@ function withFrontendExecutionGuidance(task: Task, aac: ArchitectureArtifactCont
   const existingGuidance = typeof requirement.executionGuidance === "object" && requirement.executionGuidance !== null && !Array.isArray(requirement.executionGuidance)
     ? requirement.executionGuidance as Record<string, unknown>
     : {};
+  const { workflowClosureRequirements: _legacyWorkflowClosureRequirements, ...safeExistingGuidance } = existingGuidance;
   return {
     ...task,
     frontendExperienceRequirement: {
       ...requirement,
       executionGuidance: {
-        ...existingGuidance,
+        ...safeExistingGuidance,
         ...buildFrontendExecutionGuidance(task, aac, aac.frontendExperience),
       },
     },
@@ -2522,9 +2650,14 @@ async function buildTaskExecutionRequest(
     "task.frontendExperienceRequirement.executionGuidance.navigationInScope",
     "task.frontendExperienceRequirement.executionGuidance.workflowsInScope",
     "task.frontendExperienceRequirement.executionGuidance.interactionStatesExpected",
+    "task.frontendExperienceRequirement.executionGuidance.dataViewsInScope",
+    "task.frontendExperienceRequirement.executionGuidance.actionsInScope",
+    "task.frontendExperienceRequirement.executionGuidance.operationPathsInScope",
+    "task.frontendExperienceRequirement.executionGuidance.operationPathEvidenceRule",
     "task.frontendExperienceRequirement.executionGuidance.mustNot",
     "task.frontendExperienceRequirement.executionGuidance.dataBindingExpectation",
-    "task.frontendExperienceRequirement.executionGuidance.workflowClosureRequirements",
+    "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
+    "task.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource",
     "task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings",
     "task.frontendExperienceRequirement.executionGuidance.bindingProjectionRules",
     "task.frontendExperienceRequirement.executionGuidance.bindingProjectionSummary",
@@ -2553,6 +2686,7 @@ async function buildTaskExecutionRequest(
     ...(requestTask.frontendExperienceRequirement ? [
       "outputContract.schemaShape.frontendExperienceSelfCheck.status",
       "outputContract.schemaShape.frontendExperienceSelfCheck.dataBinding",
+      "outputContract.schemaShape.frontendExperienceSelfCheck.operationPathsCovered",
       "outputContract.schemaShape.frontendExperienceSelfCheck.knownGaps",
     ] : []),
     ...(requestTask.conceptRefs && requestTask.conceptRefs.length > 0 ? ["outputContract.schemaShape.conceptEvidence"] : []),
@@ -2585,10 +2719,13 @@ async function buildTaskExecutionRequest(
             "outputContract.schemaShape.frontendExperienceSelfCheck.requirementRef",
             "outputContract.schemaShape.frontendExperienceSelfCheck.surfacesTouched",
             "outputContract.schemaShape.frontendExperienceSelfCheck.workflowsCovered",
+            "outputContract.schemaShape.frontendExperienceSelfCheck.dataViewsUsed",
+            "outputContract.schemaShape.frontendExperienceSelfCheck.actionsImplemented",
+            "outputContract.schemaShape.frontendExperienceSelfCheck.operationPathsCovered",
             "outputContract.schemaShape.frontendExperienceSelfCheck.userActionsImplemented",
             "outputContract.schemaShape.frontendExperienceSelfCheck.interactionStatesCovered",
             "outputContract.schemaShape.frontendExperienceSelfCheck.notes",
-            "outputContract.schemaShape.frontendExperienceSelfCheck.workflowClosureRequirements",
+            "outputContract.schemaShape.frontendExperienceSelfCheck.closureRequirementIds",
             "outputContract.schemaShape.frontendExperienceSelfCheck.workflowClosureEvidenceRule",
           ] : ["task.frontendExperienceRequirement"]),
           ...(requestTask.runtimeDeliveryRequirement ? ["outputContract.schemaShape.runtimeDeliveryEvidence"] : []),
@@ -2610,14 +2747,16 @@ async function buildTaskExecutionRequest(
           "Agent-chosen verification methods must return control before TaskResult submission; do not leave the task waiting on a long-running command, browser session, interactive tool, server, watcher, worker, progress summary, or handoff note.",
           "Use outputContract.schemaShape and enumRefs exactly.",
           "When choosing browser/e2e/interactive verification, follow executionRules.interactiveVerificationProbePolicy before running the tool.",
-          "When task.frontendExperienceRequirement.executionGuidance is present, use it to decide the surfaces, workflows, interaction states, and data-binding evidence for this task.",
+          "When task.frontendExperienceRequirement.executionGuidance is present, use it to decide the surfaces, workflows, operation paths, interaction states, and data-binding evidence for this task.",
           "When task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings is present, use it as the first coding guide for wiring user actions to AAC-declared interfaces, including method/path/schemas and success/error UI states.",
+          "When operationPathsInScope/dataViewsInScope/actionsInScope are present, implement or verify the declared target discovery, selection, action entry, refresh policy, and visible feedback; record matching evidence in frontendExperienceSelfCheck.",
+          "When task objective, acceptanceSnapshot, taskConceptGrounding, or sourceContext.architectureArtifactProjection names key fields, object operations, operation inputs, preconditions, blocking reasons, state changes, or feedback, implement and verify those details explicitly. Do not replace them with a generic completed feature summary.",
           ...(requestTask.frontendExperienceRequirement ? frontendImplementationOrganizationRules : []),
           "frontendBackendBindings is not an API allowlist. If a needed interface is missing from the projection, read sourceRefs.architectureArtifactContractRef, sourceRefs.taskPlanRef, and project source before deciding; do not invent an undeclared API.",
           "If unresolvedBindingInputs is non-empty, use its readToResolve guidance to continue coding when possible, or record the remaining data-binding gap in frontendExperienceSelfCheck. Do not stop only because CLI projection was incomplete.",
           ...(workflowClosureRequirements.length > 0 ? [
-            "This task has workflowClosureRequirements. The workflow is not satisfied by a static/demo-only UI or by known gaps. To write frontendExperienceSelfCheck.status=satisfied, dataBinding.mode must be wired and knownGaps must be empty.",
-            "For every workflowClosureRequirements[] item, implement or verify user action, declared interface invocation, state or persistence change, and success or blocking feedback.",
+            "This task has closureRequirementRefs. The workflow is not satisfied by a static/demo-only UI or by known gaps. To write frontendExperienceSelfCheck.status=satisfied, dataBinding.mode must be wired and knownGaps must be empty.",
+            "For every closureRequirementRefs[] item, implement or verify user action, declared interface invocation, state or persistence change, and success or blocking feedback.",
           ] : []),
           ...(requiredRuntimeEvidence ? [
             "RuntimeDeliveryEvidence is required. Copy every exact checkId from agentAction.write.requiredRuntimeEvidence.requiredCheckIds into runtimeDeliveryEvidence.codeLevelChecks[].checkId.",
@@ -2625,6 +2764,7 @@ async function buildTaskExecutionRequest(
           ] : []),
           "changedFiles must list intended deliverables only, not node_modules, caches, logs, dist, build, or other incidental side effects.",
           "When task.conceptRefs is non-empty, write conceptEvidence for every task conceptRef using the exact concept ids from taskConceptGrounding.",
+          "When conceptEvidence is required for an object operation, make the summary identify the concrete field meaning, operation invariant, validation/blocking reason, state transition, or visible feedback that was protected.",
           "If verification fails after allowed self-repair, still submit a failed or blocked TaskResult instead of asking the user whether to continue.",
         ],
       },
@@ -2736,6 +2876,7 @@ async function buildTaskExecutionRequest(
         "If dependency installation succeeds, rerun the relevant verification before writing TaskResult.",
         "Only record verification status not_run for missing dependencies after attempting the allowed package-manager install or when installation is impossible; explain the attempted command and failure in notes.",
         "Do not implement full lifecycle for reference_only entities.",
+        "Preserve task-scoped object-operation details from acceptanceSnapshot, taskConceptGrounding, and architectureArtifactProjection: key fields, operation inputs, preconditions, validation/blocking reasons, success states, state transitions, and visible feedback.",
         "Use project structure and framework conventions discovered in the workspace.",
         compactContextReadStep,
         "Record intended deliverable changes in TaskResult.changedFiles: source, tests, configs, manifests, lockfiles, docs, and other task-relevant project files.",
@@ -2797,7 +2938,11 @@ async function buildTaskExecutionRequest(
         executionGuidanceField: "task.frontendExperienceRequirement.executionGuidance",
         frontendBackendBindingsField: "task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings",
         unresolvedBindingInputsField: "task.frontendExperienceRequirement.executionGuidance.unresolvedBindingInputs",
-        workflowClosureRequirementsField: "task.frontendExperienceRequirement.executionGuidance.workflowClosureRequirements",
+        closureRequirementRefsField: "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs",
+        workflowClosureDetailSourceField: "task.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource",
+        operationPathsField: "task.frontendExperienceRequirement.executionGuidance.operationPathsInScope",
+        dataViewsField: "task.frontendExperienceRequirement.executionGuidance.dataViewsInScope",
+        actionsField: "task.frontendExperienceRequirement.executionGuidance.actionsInScope",
         useExecutionGuidanceWhenPresent: true,
         useFrontendBackendBindingsFirst: true,
         frontendBackendBindingsAreNotAllowlist: true,
@@ -2864,8 +3009,9 @@ async function buildTaskExecutionRequest(
         "For browser/e2e/interactive verification, follow executionRules.interactiveVerificationProbePolicy and record evidence through existing TaskResult fields.",
         "For frontend tasks, use task.frontendExperienceRequirement.executionGuidance when present and fill frontendExperienceSelfCheck with surfaces, workflows, user actions, states, data binding mode, and known gaps.",
         "For frontend tasks, use frontendBackendBindings as coding guidance for user-action-to-interface wiring. If a needed binding is absent, read AAC/TaskPlan/source and continue; do not treat projection absence as a validator failure.",
+        "When task acceptance or concept grounding names concrete object fields, object operations, blocking reasons, state changes, or visible feedback, verificationResults and conceptEvidence must mention the matching implemented or verified behavior instead of only reporting that the module exists.",
         ...(workflowClosureRequirements.length > 0 ? [
-          "For tasks with workflowClosureRequirements, frontendExperienceSelfCheck.status=satisfied is valid only when frontendExperienceSelfCheck.dataBinding.mode=wired and frontendExperienceSelfCheck.knownGaps is empty.",
+          "For tasks with closureRequirementRefs, frontendExperienceSelfCheck.status=satisfied is valid only when frontendExperienceSelfCheck.dataBinding.mode=wired and frontendExperienceSelfCheck.knownGaps is empty.",
           "If the task remains static_only_with_reason, mocked_with_reason, or has knownGaps for required closure, use partially_satisfied/not_satisfied in frontendExperienceSelfCheck and completed_with_notes/failed/blocked according to the actual implementation and verification outcome.",
         ] : []),
         "For taskKind runtime_delivery_closure, runtimeDeliveryEvidence.checkedFields must cover every affectedContractFields entry and codeLevelChecks must report every requiredCodeLevelChecks item.",
@@ -2975,8 +3121,26 @@ function taskResultSchemaShape(taskPlan: TaskPlan, task: Task): Record<string, u
         evidenceRefs: ["project-relative UI/test/runtime evidence file"],
         summary: "What user-visible behavior this task added or verified.",
       }],
+      dataViewsUsed: [{
+        viewRef: "view id from task.frontendExperienceRequirement.executionGuidance.dataViewsInScope",
+        coverage: "implemented | wired | verified | not_applicable",
+        evidenceRefs: ["project-relative UI/test/runtime evidence file"],
+        summary: "How users can find, select, or inspect the target object through this view.",
+      }],
+      actionsImplemented: [{
+        actionRef: "action id from task.frontendExperienceRequirement.executionGuidance.actionsInScope",
+        coverage: "implemented | wired | verified | static_only | not_applicable",
+        evidenceRefs: ["project-relative UI/test/runtime evidence file"],
+        summary: "How the user triggers the action and sees success, blocking, or error feedback.",
+      }],
+      operationPathsCovered: [{
+        pathRef: "path id from task.frontendExperienceRequirement.executionGuidance.operationPathsInScope",
+        coverage: "implemented | wired | verified | static_only | not_applicable",
+        evidenceRefs: ["project-relative UI/test/runtime evidence file"],
+        summary: "How the target discovery, action entry, refresh/result observation, and feedback path is covered.",
+      }],
       userActionsImplemented: ["plain-language user action implemented or verified"],
-      interactionStatesCovered: ["idle | loading | success | error | empty"],
+      interactionStatesCovered: ["idle | loading | success | error | empty | business_blocking"],
       dataBinding: {
         mode: "wired | mocked_with_reason | static_only_with_reason | not_applicable",
         ...(workflowClosureRequirements.length > 0 ? {
@@ -2985,12 +3149,13 @@ function taskResultSchemaShape(taskPlan: TaskPlan, task: Task): Record<string, u
           modeRule: "When closureRequirementIds is non-empty, status=satisfied requires mode=wired. mocked_with_reason/static_only_with_reason/not_applicable cannot be satisfied for these closure requirements.",
         } : {}),
         interfaceRefs: ["AAC interface refs actually used or verified by this task; this is evidence, not a validator allowlist"],
+        interfaceRolesCovered: ["read_model | command | readback | component_binding | external_contract | unknown"],
         evidenceRefs: ["project-relative refs"],
-        notes: ["which user actions were wired to interfaces, or why binding remains a known gap"],
+        notes: ["which user actions were wired to read_model/command/readback interfaces, or why binding remains a known gap"],
       },
       ...(workflowClosureRequirements.length > 0 ? {
-        workflowClosureRequirements,
-        workflowClosureEvidenceRule: "For each workflowClosureRequirements item, evidence must cover user_action, declared_interface_invocation, state_or_persistence_change, and success_or_blocking_feedback. If any remains a known gap, do not write status=satisfied.",
+        closureRequirementIds: workflowClosureRequirements.map((requirement) => String(requirement.closureId ?? "")),
+        workflowClosureEvidenceRule: "For each closureRequirementIds item, evidence must cover user_action, declared_interface_invocation, state_or_persistence_change, and success_or_blocking_feedback. If any remains a known gap, do not write status=satisfied.",
       } : {}),
       knownGaps: ["remaining frontend gaps or []"],
       notes: ["How the UI work satisfies or partially satisfies the frontend requirement."],
@@ -2999,7 +3164,7 @@ function taskResultSchemaShape(taskPlan: TaskPlan, task: Task): Record<string, u
       conceptRef,
       evidenceType: "code | test | api | ui | runtime | documentation",
       refs: ["project-relative code/test/UI/API/runtime evidence file"],
-      summary: "How this task implemented or protected the concept without misinterpretation.",
+      summary: "How this task implemented or protected the concept without misinterpretation. For object-operation concepts, name the field meaning, operation invariant, validation/blocking reason, state transition, or visible feedback covered.",
     })) : undefined,
     runtimeDeliveryEvidence: task.runtimeDeliveryRequirement ? {
       requirementRef: "task.runtimeDeliveryRequirement.runtimeDeliveryRef",
@@ -3153,6 +3318,15 @@ function buildArchitectureProjection(aac: ArchitectureArtifactContract, task: Ta
     entityRefs.has(relationship.toEntityRef) ||
     relationship.acceptanceRefs.some((ref) => acceptanceRefs.has(ref))
   );
+  const relevantFrontendOperationPaths = (aac.frontendExperience?.operationPaths ?? []).filter((operationPath) =>
+    (operationPath.workflowRef ? userFlowRefs.has(operationPath.workflowRef) : false) ||
+    (operationPath.surfaceRef ? (aac.frontendExperience?.surfaces ?? []).some((surface) =>
+      surface.surfaceId === operationPath.surfaceRef &&
+      (surface.moduleRefs.some((ref) => moduleRefs.has(ref)) || surface.workflowRefs.some((ref) => userFlowRefs.has(ref)))
+    ) : false)
+  );
+  const relevantDataViewRefs = new Set(relevantFrontendOperationPaths.flatMap((operationPath) => operationPath.dataViewRefs));
+  const relevantActionRefs = new Set(relevantFrontendOperationPaths.flatMap((operationPath) => operationPath.actionRefs));
 
   return {
     profile: "compact_task_execution_context",
@@ -3166,6 +3340,8 @@ function buildArchitectureProjection(aac: ArchitectureArtifactContract, task: Ta
         "interface request/response/error schemas",
         "user flow steps and outcomes",
         "state machine transitions guards effects and rules",
+        "frontend operation paths data views actions and feedback",
+        "task-relevant object operations, field sets, blocking reasons, state changes, and visible feedback when AAC preserved them",
       ],
       fallbackRule: "If this projection still lacks a detail needed for the task, read sourceRefs.architectureArtifactContractRef with targeted selectors; do not guess missing requirement rules.",
     },
@@ -3229,6 +3405,7 @@ function buildArchitectureProjection(aac: ArchitectureArtifactContract, task: Ta
         interfaceId: item.interfaceId,
         name: item.name,
         type: item.type,
+        role: item.role ?? null,
         method: item.method,
         path: item.path,
       })),
@@ -3238,6 +3415,7 @@ function buildArchitectureProjection(aac: ArchitectureArtifactContract, task: Ta
         interfaceId: item.interfaceId,
         name: item.name,
         type: item.type,
+        role: item.role ?? null,
         moduleRefs: item.moduleRefs,
         entityRefs: item.entityRefs,
         scopeRefs: item.scopeRefs,
@@ -3271,6 +3449,12 @@ function buildArchitectureProjection(aac: ArchitectureArtifactContract, task: Ta
         steps: item.steps,
         outcomes: item.outcomes,
       })),
+    frontendOperationPathDetails: {
+      dataViews: (aac.frontendExperience?.dataViews ?? []).filter((dataView) => relevantDataViewRefs.has(dataView.viewId)),
+      actions: (aac.frontendExperience?.actions ?? []).filter((action) => relevantActionRefs.has(action.actionId)),
+      operationPaths: relevantFrontendOperationPaths,
+      fallbackRule: "If this task owns UI behavior and this projection is empty or incomplete, read sourceRefs.architectureArtifactContractRef#/frontendExperience with targeted selectors before deciding the operation path is not applicable.",
+    },
     stateMachineSummaries: aac.stateMachines
       .filter((item) => stateMachineRefs.has(item.stateMachineId))
       .map((item) => ({
@@ -3452,6 +3636,12 @@ function taskPlanRequirementDetailProjection(
   aac: ArchitectureArtifactContract,
 ): Record<string, unknown> {
   const acceptanceMatrixById = new Map(aac.acceptanceMatrix.map((entry) => [entry.acceptanceId, entry]));
+  const frontendOperationPathDetails = {
+    dataViews: aac.frontendExperience?.dataViews ?? [],
+    actions: aac.frontendExperience?.actions ?? [],
+    operationPaths: aac.frontendExperience?.operationPaths ?? [],
+    rule: "Use these AAC frontendExperience operation path details when assigning frontend tasks. They describe target discovery, selection, action entry, refresh/result observation, and user-visible feedback.",
+  };
   return {
     authority: "planning_generation_contract_plus_architecture_artifact_contract",
     purpose: "Mechanically carry Brainstorm-confirmed current phase details and AAC taskable artifacts into TaskPlan generation.",
@@ -3493,6 +3683,22 @@ function taskPlanRequirementDetailProjection(
       };
     }),
     businessFlowDetails: pgc.planningInputs.businessFlows,
+    objectOperationDetailRules: {
+      sourceFields: [
+        "currentPhaseScope.included[].items",
+        "acceptanceDetails[].statement",
+        "businessFlowDetails[].summary",
+        "architectureDetails.entities",
+        "architectureDetails.userFlows",
+        "architectureDetails.stateMachines",
+        "architectureDetails.interfaces",
+        "conceptRefs.phaseConceptGroundingRef",
+      ],
+      scopeCoverageRule: "Every currentPhaseScope.included item should remain traceable into TaskPlan tasks, verificationIntents, or an explicit blocked/unresolved reason. Do not plan only the most obvious subset of included scope.",
+      taskAssignmentRule: "When Brainstorm/PGC/AAC carries key business objects, key field sets, object operations, operation inputs, preconditions, validation/blocking reasons, success state changes, or visible feedback, assign those details to concrete tasks and verificationIntents instead of reducing the work to generic service or UI labels.",
+      conceptBindingRule: "If a task owns an operation invariant, state transition rule, blocking reason, or field meaning from phaseConceptGroundingRef, include conceptRefs, conceptResponsibilities, and conceptVerificationIntents for that task.",
+      evidenceRule: "TaskResult must be able to show which fields, rules, state changes, blocking feedback, interface roles, or page operation paths were implemented or verified.",
+    },
     architectureDetails: {
       modules: aac.modules,
       entities: aac.dataModel.entities,
@@ -3500,6 +3706,7 @@ function taskPlanRequirementDetailProjection(
       userFlows: aac.userFlows,
       stateMachines: aac.stateMachines,
       frontendExperience: aac.frontendExperience ?? null,
+      frontendOperationPathDetails,
       runtimeDelivery: aac.runtimeDelivery ?? null,
     },
     workflowClosureRequirements: buildWorkflowClosureRequirements(aac),
@@ -3509,10 +3716,10 @@ function taskPlanRequirementDetailProjection(
     },
     taskPlanningFieldMapping: {
       groupsObjective: "Summarize the engineering capability slice using currentPhaseScope items plus acceptanceDetails.",
-      taskObjective: "Name the concrete rule, field, flow, state, UI, API, or blocking detail the task owns.",
+      taskObjective: "Name the concrete business object, field set, operation, input, rule, flow, state, UI, API, blocking detail, or feedback detail the task owns.",
       implementationActions: "Choose enum actions that match the AAC artifact kind and concrete detail.",
       writeBoundaryArtifactRefs: "Reference AAC modules/entities/interfaces/userFlows/stateMachines/decisions/risks that carry the detail.",
-      verificationIntentsBehavior: "Describe the specific acceptance rule, field, state, flow, or feedback this task must verify.",
+      verificationIntentsBehavior: "Describe the specific acceptance rule, object operation, input, field, state, flow, blocking reason, operation path, readback, or feedback this task must verify.",
       frontendExperienceRequirement: "Use when frontendExperience is required or a task owns UI surfaces/workflows/states/bindings.",
       workflowClosureRequirement: "When workflowClosureRequirements exists, assign each closureId to at least one task whose artifact refs include the workflowRef and interfaceRefs, whose implementationActions include wire_reference_in_api_or_ui, and whose verificationIntents can prove the wired user action through automated_test or runtime_api_check evidence.",
       runtimeDeliveryRequirement: "Use when the task touches build/start/runtime entry/serving/configuration/generated artifacts/runtime surface.",
@@ -4023,13 +4230,14 @@ function taskPlanGroupSchemaShape(locator: DeliveryPhaseLocator, requestId: stri
         mustSatisfy: [
           "surface fits frontendExperience.surfaces",
           "navigation follows frontendExperience.navigation when required",
+          "operation path covers declared dataViews/actions/operationPaths when present",
           "interaction states include idle/loading/success/error where applicable",
           ...(workflowClosureRequirement ? ["workflow closure uses wired data binding, not static-only/demo-only feedback"] : []),
         ],
         ...(workflowClosureRequirement ? {
           executionGuidance: {
-            closureRequirementRefs: [workflowClosureRequirement.closureId],
-            workflowClosureRequirements: workflowClosureRequirementExecutionView([workflowClosureRequirement]),
+            closureRequirementRefs: workflowClosureRequirementExecutionView([workflowClosureRequirement]),
+            workflowClosureDetailSource: workflowClosureExecutionDetailSource([workflowClosureRequirement]),
           },
         } : {}),
       } : undefined,
@@ -4115,10 +4323,13 @@ function buildTaskGenerationRules(aac?: ArchitectureArtifactContract): Record<st
       authorityField: "contextProjection.requirementDetailTransfer",
       rules: [
         "Use contextProjection.requirementDetailTransfer before writing the outline or any group file.",
-        "Carry concrete current phase details from acceptanceDetails, currentPhaseScope.included[].items, businessFlowDetails, and architectureDetails into TaskPlan groups and tasks.",
-        "Task objective must identify the concrete rule, field, workflow, state, UI surface, API/interface, blocking reason, or runtime contract detail the task owns when such detail exists.",
+        "Carry concrete current phase details from acceptanceDetails, currentPhaseScope.included[].items, businessFlowDetails, objectOperationDetailRules, and architectureDetails into TaskPlan groups and tasks.",
+        "Task objective must identify the concrete business object, key field set, operation, operation input, rule, workflow, state, UI surface, operation path, API/interface, blocking reason, visible feedback, or runtime contract detail the task owns when such detail exists.",
         "verificationIntents[].behavior must describe the concrete behavior to verify, not only repeat an acceptance id or module label.",
         "writeBoundary.artifactRefs must point to the AAC artifacts that carry the task detail; do not leave artifactRefs empty for implementation tasks when matching AAC artifacts exist.",
+        "When objectOperationDetailRules names scope coverage, operation inputs, field sets, blocking reasons, state changes, or feedback, assign them through task objectives, conceptResponsibilities, writeBoundary artifactRefs, and verificationIntents so TaskExecution can implement and prove them.",
+        "When architectureDetails.frontendOperationPathDetails.operationPaths is non-empty, assign target discovery, action entry, refresh/result observation, and feedback responsibilities to frontend or integration tasks through frontendExperienceRequirement.",
+        "When AAC interfaces include role=read_model, role=command, or role=readback for the same frontend workflow or operation path, TaskPlan must make producer implementation, frontend consumer wiring, and post-action readback/refresh verification responsibilities explicit in one coherent task or dependent task group.",
         "If required detail exists in PGC but no AAC artifact can carry it, write blocked output with blockedReasonCode AAC_INSUFFICIENT.",
       ],
     },
@@ -4152,6 +4363,7 @@ function buildTaskGenerationRules(aac?: ArchitectureArtifactContract): Record<st
       phaseConceptGroundingRef: "sourceRefs.phaseConceptGroundingRef when present",
       rules: [
         "If a task is responsible for a current high-risk concept, include conceptRefs, conceptResponsibilities, and conceptVerificationIntents.",
+        "If a task owns a business object field meaning, operation invariant, validation/blocking reason, state transition, or visible feedback from phaseConceptGroundingRef, bind the corresponding conceptRef and describe that concrete responsibility.",
         "Use conceptRefs only from phaseConceptGroundingRef; do not invent concept ids.",
         "Every conceptRefs item must have a matching conceptResponsibilities item.",
         "ConceptVerificationIntents evidenceType must use enumRefs.conceptEvidenceType.",
@@ -4164,15 +4376,20 @@ function buildTaskGenerationRules(aac?: ArchitectureArtifactContract): Record<st
       rules: [
         "If frontendExperience.required=true, include frontend task coverage for the current phase UI surfaces.",
         "Do not treat frontend_experience as a visual preference only; it is a delivery contract for usable UI structure.",
+        "When frontendExperience.dataViews/actions/operationPaths are present, TaskPlan must make those operation-path responsibilities visible in task objectives, verificationIntents, and frontendExperienceRequirement; do not reduce them to a generic UI shell task.",
+        "If a task owns a frontend operation path with interfaces in scope, its verificationIntents should cover the user-visible read model, the submitted command, and the result readback/refresh or status observation when those interface roles are declared in AAC.",
         ...frontendImplementationOrganizationRules,
         "Do not block small API-only phases when frontendExperience.required=false.",
       ],
     },
     workflowClosureRules: {
       derivationAuthority: "AAC structure only. No acceptance text, phase title, or business keyword scanning is used.",
-      requirements: workflowClosureRequirements,
-      appliesWhen: "requirements.length > 0",
-      taskAssignmentRule: "Every workflowClosureRequirements[] item must be assigned to at least one TaskPlan task.",
+      requirementSource: workflowClosureRequirementSourceSummary(workflowClosureRequirements, {
+        sourcePath: TASKPLAN_WORKFLOW_CLOSURE_REQUIREMENTS_SOURCE_PATH,
+        phase: "taskplan_generation",
+      }),
+      appliesWhen: "requirementSource.requirementCount > 0",
+      taskAssignmentRule: "Every closure requirement from requirementSource.sourcePath must be assigned to at least one TaskPlan task.",
       taskCoverageShape: {
         writeBoundaryArtifactRefs: {
           userFlows: "must include requirement.workflowRef",
@@ -4182,7 +4399,7 @@ function buildTaskGenerationRules(aac?: ArchitectureArtifactContract): Record<st
         frontendExperienceRequirement: "required",
         implementationActions: "must include wire_reference_in_api_or_ui",
         verificationIntents: "at least one intent covering requirement.acceptanceRefs with acceptableEvidence automated_test or runtime_api_check",
-        frontendExperienceRequirementExecutionGuidance: "should include workflowClosureRequirements or closureRequirementRefs so TaskExecution can enforce wired evidence.",
+        frontendExperienceRequirementExecutionGuidance: "should include closureRequirementRefs so TaskExecution can enforce wired evidence, including operationPathRefs/dataViewRefs/actionRefs when present. Do not embed the full workflow closure payload.",
       },
       resultExpectation: {
         requiredDataBindingModeForSatisfaction: "wired",
@@ -4193,6 +4410,7 @@ function buildTaskGenerationRules(aac?: ArchitectureArtifactContract): Record<st
       rules: [
         "Use contextProjection.requirementDetailTransfer.workflowClosureRequirements as the exact workflow closure requirement list.",
         "For each closure requirement, create or update tasks so the user action, declared interface invocation, state/persistence change, and success/blocking feedback are owned by executable tasks.",
+        "When closure requirement interfaces include read_model/command/readback roles, assigned tasks must state which role each task implements or verifies; do not approve a static frontend consumer when the command/readback wiring is still a known gap.",
         "Do not satisfy a workflow closure requirement with a static or demo-only UI task.",
         "Do not split closure into unrelated backend-only and static frontend-only tasks without a task that owns the user-action-to-interface wiring and verification responsibility.",
         "The assigned task may be ui_flow_increment, frontend_experience, integration_increment, or feature_increment; taskKind is less important than the coverage shape above.",

@@ -5,6 +5,7 @@ export type ReferencedArtifactReadGuideEntry = {
   purpose: string;
   requiredSelectors: string[];
   optionalSelectors?: string[];
+  usageRule?: string;
   doNotGuessAlternateRoots: true;
   nullSelectorHandling: string;
 };
@@ -501,6 +502,7 @@ function conceptGroundingGuide(
       ".concepts[].acceptanceRefs",
       ".concepts[].humanReadableReason",
     ],
+    usageRule: "For current-phase concept grounding, .concepts[].explanation may carry confirmed business object semantics, key field meanings, object operations, operation inputs, validation/blocking reasons, state changes, visible feedback, and misunderstanding boundaries.",
     doNotGuessAlternateRoots: true,
     nullSelectorHandling: "If concepts is empty, respect mode/reason. Do not infer missing concepts from unrelated artifacts unless the current request asks you to repair ConceptGrounding.",
   };

@@ -556,6 +556,93 @@ export const frontendExperienceLevelSchema = z.enum([
   "polished_product",
 ]);
 
+export const frontendTargetSelectionModeSchema = z.enum([
+  "query_and_select",
+  "direct_id_lookup",
+  "preselected_context",
+  "not_applicable",
+]);
+
+export const frontendActionEntryPointSchema = z.enum([
+  "result_row_action",
+  "detail_button",
+  "form_submit",
+  "bulk_action",
+  "inline_action",
+  "navigation_entry",
+]);
+
+export const frontendResultObservationModeSchema = z.enum([
+  "list_refresh",
+  "detail_refresh",
+  "inline_status_update",
+  "response_message",
+  "not_applicable",
+]);
+
+export const frontendInteractionStateSchema = z.enum([
+  "loading",
+  "success",
+  "error",
+  "empty",
+  "business_blocking",
+]);
+
+export const frontendSearchCriterionSchema = z.object({
+  criterionId: z.string().min(1),
+  label: z.string().min(1),
+  fieldRef: z.string().min(1).optional(),
+  reason: z.string().min(1),
+  sourceRefs: stringArraySchema,
+});
+
+export const frontendDataViewSchema = z.object({
+  viewId: z.string().min(1),
+  name: z.string().min(1),
+  purpose: z.string().min(1),
+  targetObject: z.string().min(1).optional(),
+  selectionMode: frontendTargetSelectionModeSchema,
+  paginationRequired: z.boolean(),
+  defaultLoadsFirstPage: z.boolean(),
+  searchCriteria: z.array(frontendSearchCriterionSchema).optional(),
+  criteriaUnclearNote: z.string().min(1).optional(),
+  sourceRefs: stringArraySchema,
+});
+
+export const frontendActionPathSchema = z.object({
+  actionId: z.string().min(1),
+  label: z.string().min(1),
+  targetObject: z.string().min(1).optional(),
+  entryPoint: frontendActionEntryPointSchema,
+  inputFields: stringArraySchema.optional(),
+  resultObservation: z.array(frontendResultObservationModeSchema),
+  refreshPolicy: z.enum([
+    "refresh_current_query",
+    "refresh_detail",
+    "update_inline_state",
+    "show_message_only",
+    "not_applicable",
+  ]),
+  successFeedback: stringArraySchema,
+  blockingOrErrorFeedback: stringArraySchema,
+  sourceRefs: stringArraySchema,
+});
+
+export const frontendOperationPathSchema = z.object({
+  pathId: z.string().min(1),
+  name: z.string().min(1),
+  userGoal: z.string().min(1),
+  surfaceRef: z.string().min(1).optional(),
+  workflowRef: z.string().min(1).optional(),
+  targetObject: z.string().min(1).optional(),
+  selectionMode: frontendTargetSelectionModeSchema,
+  selectionSummary: z.string().min(1),
+  dataViewRefs: stringArraySchema,
+  actionRefs: stringArraySchema,
+  requiredStates: z.array(frontendInteractionStateSchema),
+  sourceRefs: stringArraySchema,
+});
+
 export const confirmedFrontendExperienceTargetSchema = z.object({
   required: z.boolean(),
   kind: z.string().min(1),
@@ -571,6 +658,9 @@ export const confirmedFrontendExperienceTargetSchema = z.object({
     audienceRefs: stringArraySchema,
     primaryJobs: stringArraySchema,
   })).optional(),
+  dataViews: z.array(frontendDataViewSchema).optional(),
+  actions: z.array(frontendActionPathSchema).optional(),
+  operationPaths: z.array(frontendOperationPathSchema).optional(),
   mustNot: stringArraySchema,
   confirmationSummary: z.string().min(1).optional(),
 });
@@ -581,6 +671,9 @@ export const frontendExperienceDeltaSchema = z.object({
   newSurfaceRequired: z.boolean(),
   affectedSurfaceRefs: stringArraySchema,
   affectedViewCandidates: stringArraySchema,
+  dataViewDeltas: z.array(frontendDataViewSchema).optional(),
+  actionDeltas: z.array(frontendActionPathSchema).optional(),
+  operationPathDeltas: z.array(frontendOperationPathSchema).optional(),
   experienceLevelOverride: frontendExperienceLevelSchema.nullable(),
   mustNotDelta: stringArraySchema,
   confirmationSummary: z.string().min(1).optional(),

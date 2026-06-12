@@ -237,6 +237,7 @@ function writeFrontendDeliveryFixture(root) {
       interfaceId: "if-booking-form",
       name: "BookingForm",
       type: "component",
+      role: "component_binding",
       moduleRefs: ["module-booking-ui"],
       entityRefs: ["entity-booking"],
       scopeRefs: ["scope-booking"],
@@ -245,6 +246,7 @@ function writeFrontendDeliveryFixture(root) {
       interfaceId: "if-create-booking",
       name: "Create booking API",
       type: "http_api",
+      role: "command",
       moduleRefs: ["module-booking-ui"],
       entityRefs: ["entity-booking"],
       scopeRefs: ["scope-booking"],
@@ -311,12 +313,49 @@ function writeFrontendDeliveryFixture(root) {
         workflowRefs: ["flow-submit-booking"],
         moduleRefs: ["module-booking-ui"],
       }],
+      dataViews: [{
+        viewId: "view-booking-form",
+        name: "Booking form",
+        purpose: "Let users enter booking details before submitting.",
+        targetObject: "Booking",
+        selectionMode: "not_applicable",
+        paginationRequired: false,
+        defaultLoadsFirstPage: false,
+        searchCriteria: [],
+        sourceRefs: ["AC-booking"],
+      }],
+      actions: [{
+        actionId: "action-submit-booking",
+        label: "Submit booking",
+        targetObject: "Booking",
+        entryPoint: "form_submit",
+        inputFields: ["customerName"],
+        resultObservation: ["response_message", "detail_refresh"],
+        refreshPolicy: "refresh_detail",
+        successFeedback: ["Booking result appears"],
+        blockingOrErrorFeedback: ["Customer name is required"],
+        sourceRefs: ["AC-booking"],
+      }],
+      operationPaths: [{
+        pathId: "path-submit-booking",
+        name: "Submit booking path",
+        userGoal: "Submit a booking from the web UI and see the result.",
+        surfaceRef: "surface-booking",
+        workflowRef: "flow-submit-booking",
+        targetObject: "Booking",
+        selectionMode: "not_applicable",
+        selectionSummary: "User opens the booking form, enters details, submits, and sees a refreshed booking result or blocking message.",
+        dataViewRefs: ["view-booking-form"],
+        actionRefs: ["action-submit-booking"],
+        requiredStates: ["loading", "success", "error", "business_blocking"],
+        sourceRefs: ["AC-booking"],
+      }],
       navigation: {
         required: true,
         pattern: "single_page_primary_action",
         items: [{ label: "Booking", targetSurfaceRef: "surface-booking" }],
       },
-      interactionStates: ["idle", "loading", "success", "error", "empty"],
+      interactionStates: ["idle", "loading", "success", "error", "empty", "business_blocking"],
       mustNot: ["Do not deliver only descriptive static text for the booking workflow."],
       notes: ["Fixture frontend contract."],
     },
@@ -408,6 +447,19 @@ function writeFrontendDeliveryFixture(root) {
         frontendExperienceRef: "architectureArtifactContractRef#/frontendExperience",
         experienceLevel: "usable_internal_product",
         mustSatisfy: ["surface fits frontendExperience.surfaces"],
+        executionGuidance: {
+          legacySmallHint: "preserve non-payload guidance while replacing generated guidance",
+          workflowClosureRequirements: [{
+            closureId: "legacy-full-payload-should-not-survive",
+            workflowRef: "flow-submit-booking",
+            interfaces: [{
+              interfaceId: "if-create-booking",
+              requestSchema: [{ fieldId: "legacy-request", name: "legacyRequest", type: "string", required: true }],
+              responseSchema: [{ fieldId: "legacy-response", name: "legacyResponse", type: "string", required: true }],
+              errorSchema: [{ fieldId: "legacy-error", name: "legacyError", type: "string", required: true }],
+            }],
+          }],
+        },
       },
     }],
     handoff: { readyForExecution: true, nextNode: "task_execution", blockedReasons: [] },
@@ -487,13 +539,29 @@ try {
   assert.equal(guidance?.responsibility, "workflow_implementation");
   assert.deepEqual(guidance?.surfacesInScope?.map((surface) => surface.surfaceId), ["surface-booking"]);
   assert.deepEqual(guidance?.workflowsInScope?.map((workflow) => workflow.workflowRef), ["flow-submit-booking"]);
+  assert.deepEqual(guidance?.dataViewsInScope?.map((view) => view.viewId), ["view-booking-form"]);
+  assert.deepEqual(guidance?.actionsInScope?.map((action) => action.actionId), ["action-submit-booking"]);
+  assert.deepEqual(guidance?.operationPathsInScope?.map((operationPath) => operationPath.pathId), ["path-submit-booking"]);
+  assert.equal(guidance?.operationPathsInScope?.[0]?.selectionSummary.includes("booking form"), true);
+  assert.equal(guidance?.operationPathWarnings?.length, 0);
   assert.deepEqual(guidance?.dataBindingExpectation?.interfacesInScope, ["if-create-booking", "if-booking-form"]);
+  assert.deepEqual(
+    guidance?.dataBindingExpectation?.interfaceRolesInScope?.map((item) => [item.interfaceRef, item.role]),
+    [["if-create-booking", "command"], ["if-booking-form", "component_binding"]],
+  );
   assert.equal(guidance?.dataBindingExpectation?.requiredModeForSatisfaction, "wired");
   assert.deepEqual(guidance?.dataBindingExpectation?.closureRequirementIds, ["closure:flow-submit-booking:step-submit"]);
-  assert.equal(guidance?.workflowClosureRequirements?.length, 1, "frontend guidance must project workflow closure requirements for assigned closure tasks.");
-  assert.equal(guidance.workflowClosureRequirements[0].workflowRef, "flow-submit-booking");
-  assert.deepEqual(guidance.workflowClosureRequirements[0].interfaceRefs, ["if-create-booking"]);
-  assert.equal(guidance.workflowClosureRequirements[0].requiredDataBindingMode, "wired");
+  assert.equal(guidance?.legacySmallHint, "preserve non-payload guidance while replacing generated guidance", "frontend guidance should preserve non-payload existing guidance.");
+  assert.equal(guidance?.workflowClosureRequirements, undefined, "frontend guidance must not duplicate full workflow closure requirements.");
+  assert.equal(guidance?.closureRequirementRefs?.length, 1, "frontend guidance must project lightweight workflow closure refs for assigned closure tasks.");
+  assert.equal(guidance.closureRequirementRefs[0].workflowRef, "flow-submit-booking");
+  assert.deepEqual(guidance.closureRequirementRefs[0].operationPathRefs, ["path-submit-booking"]);
+  assert.deepEqual(guidance.closureRequirementRefs[0].dataViewRefs, ["view-booking-form"]);
+  assert.deepEqual(guidance.closureRequirementRefs[0].actionRefs, ["action-submit-booking"]);
+  assert.deepEqual(guidance.closureRequirementRefs[0].interfaceRefs, ["if-create-booking"]);
+  assert.equal(guidance.closureRequirementRefs[0].requiredDataBindingMode, "wired");
+  assert.equal(guidance.closureRequirementRefs[0].interfaces, undefined, "closure refs must not duplicate full interface schemas.");
+  assert.deepEqual(guidance?.workflowClosureDetailSource?.closureRequirementIds, ["closure:flow-submit-booking:step-submit"]);
   assert.equal(guidance?.bindingProjectionRules?.apiContractAuthority, "AAC global interfaces. Task scope and workflow refs only select the most relevant bindings.");
   assert.equal(guidance?.bindingProjectionRules?.bindingsAreNotAllowlist, true);
   assert.equal(guidance?.frontendBackendBindings?.length, 1, "frontend guidance must project step-level API binding.");
@@ -503,6 +571,7 @@ try {
   assert.equal(binding.userAction, "Fill booking details and submit");
   assert.equal(binding.interfaces.length, 1);
   assert.equal(binding.interfaces[0].interfaceId, "if-create-booking");
+  assert.equal(binding.interfaces[0].role, "command");
   assert.equal(binding.interfaces[0].method, "POST");
   assert.equal(binding.interfaces[0].path, "/api/bookings");
   assert.deepEqual(binding.interfaces[0].requestSchema, [{ fieldId: "field-customer-name", name: "customerName", type: "string", required: true }]);
@@ -524,7 +593,11 @@ try {
   const requiredReads = fieldValue(readPlan, "agentAction.read.required");
   assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings"), "agent read plan must name frontendBackendBindings.");
   assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.unresolvedBindingInputs"), "agent read plan must name unresolved binding inputs.");
-  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.workflowClosureRequirements"), "agent read plan must name workflow closure requirements.");
+  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs"), "agent read plan must name workflow closure refs.");
+  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource"), "agent read plan must name workflow closure detail source.");
+  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.operationPathsInScope"), "agent read plan must name operation paths.");
+  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.dataViewsInScope"), "agent read plan must name data views.");
+  assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.actionsInScope"), "agent read plan must name frontend actions.");
   assert.ok(requiredReads.includes("task.frontendExperienceRequirement.executionGuidance.dataBindingExpectation"), "agent read plan must name data-binding expectations for closure tasks.");
   assert.ok(requiredReads.includes("sourceContext.architectureArtifactProjection"), "agent read plan must require task-scoped AAC projection.");
 
@@ -538,8 +611,12 @@ try {
   const projection = fieldValue(projectionRead, "sourceContext.architectureArtifactProjection");
   assert.equal(projection.projectionCompleteness?.includesTaskRelevantDescriptions, true, "AAC projection must declare task-relevant detail completeness.");
   assert.deepEqual(projection.interfaceContracts?.find((item) => item.interfaceId === "if-create-booking")?.requestSchema, [{ fieldId: "field-customer-name", name: "customerName", type: "string", required: true }]);
+  assert.equal(projection.interfaceContracts?.find((item) => item.interfaceId === "if-create-booking")?.role, "command");
   assert.equal(projection.userFlowDetails?.[0]?.steps?.[0]?.systemResponse, "Booking result appears", "AAC projection must include user flow step response.");
   assert.equal(projection.userFlowDetails?.[0]?.outcomes?.[0]?.description, "Booking is accepted.", "AAC projection must include user flow outcomes.");
+  assert.equal(projection.frontendOperationPathDetails?.operationPaths?.[0]?.pathId, "path-submit-booking", "AAC projection must include task-relevant operation paths.");
+  assert.equal(projection.frontendOperationPathDetails?.dataViews?.[0]?.viewId, "view-booking-form", "AAC projection must include task-relevant data views.");
+  assert.equal(projection.frontendOperationPathDetails?.actions?.[0]?.actionId, "action-submit-booking", "AAC projection must include task-relevant frontend actions.");
   assert.equal(projection.entityDetails?.[0]?.constraints?.[0]?.description, "Customer name is required before booking submission.", "AAC projection must include entity constraints.");
   assert.equal(projection.dataConstraints?.[0]?.description, "A booking submission must include valid customer details before it can be accepted.", "AAC projection must include global data constraints.");
   assert.equal(projection.stateMachineDetails?.[0]?.transitions?.[0]?.guards?.[0], "Customer name is present.", "AAC projection must include state transition guards.");
@@ -557,7 +634,11 @@ try {
   assert.equal(frontendRules.executionGuidanceField, "task.frontendExperienceRequirement.executionGuidance");
   assert.equal(frontendRules.frontendBackendBindingsField, "task.frontendExperienceRequirement.executionGuidance.frontendBackendBindings");
   assert.equal(frontendRules.unresolvedBindingInputsField, "task.frontendExperienceRequirement.executionGuidance.unresolvedBindingInputs");
-  assert.equal(frontendRules.workflowClosureRequirementsField, "task.frontendExperienceRequirement.executionGuidance.workflowClosureRequirements");
+  assert.equal(frontendRules.closureRequirementRefsField, "task.frontendExperienceRequirement.executionGuidance.closureRequirementRefs");
+  assert.equal(frontendRules.workflowClosureDetailSourceField, "task.frontendExperienceRequirement.executionGuidance.workflowClosureDetailSource");
+  assert.equal(frontendRules.operationPathsField, "task.frontendExperienceRequirement.executionGuidance.operationPathsInScope");
+  assert.equal(frontendRules.dataViewsField, "task.frontendExperienceRequirement.executionGuidance.dataViewsInScope");
+  assert.equal(frontendRules.actionsField, "task.frontendExperienceRequirement.executionGuidance.actionsInScope");
   assert.equal(frontendRules.useFrontendBackendBindingsFirst, true);
   assert.equal(frontendRules.frontendBackendBindingsAreNotAllowlist, true);
   assert.equal(frontendRules.executionGuidanceIsNonBlocking, true);
@@ -615,11 +696,15 @@ try {
   ], projectRoot);
   const selfCheckShape = fieldValue(selfCheckRead, "outputContract.schemaShape.frontendExperienceSelfCheck");
   assert.ok(selfCheckShape.workflowsCovered, "frontend self-check shape must guide workflow evidence.");
+  assert.ok(selfCheckShape.dataViewsUsed, "frontend self-check shape must guide data view evidence.");
+  assert.ok(selfCheckShape.actionsImplemented, "frontend self-check shape must guide frontend action evidence.");
+  assert.ok(selfCheckShape.operationPathsCovered, "frontend self-check shape must guide operation path evidence.");
   assert.ok(selfCheckShape.userActionsImplemented, "frontend self-check shape must guide user action evidence.");
   assert.ok(selfCheckShape.dataBinding, "frontend self-check shape must guide data-binding evidence.");
   assert.equal(selfCheckShape.dataBinding.requiredModeForSatisfaction, "wired", "frontend self-check shape must require wired mode for closure satisfaction.");
   assert.deepEqual(selfCheckShape.dataBinding.closureRequirementIds, ["closure:flow-submit-booking:step-submit"]);
-  assert.equal(selfCheckShape.workflowClosureRequirements?.length, 1, "frontend self-check shape must expose workflow closure requirements.");
+  assert.deepEqual(selfCheckShape.closureRequirementIds, ["closure:flow-submit-booking:step-submit"], "frontend self-check shape must expose closure ids without full payload.");
+  assert.equal(selfCheckShape.workflowClosureRequirements, undefined, "frontend self-check shape must not duplicate workflow closure requirements.");
   assert.ok(selfCheckShape.knownGaps, "frontend self-check shape must guide known gap recording.");
   assert.equal(
     Object.hasOwn(selfCheckShape, "browserVerification"),
