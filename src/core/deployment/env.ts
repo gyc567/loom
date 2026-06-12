@@ -309,7 +309,9 @@ async function scanSourceEnvReferences(
   deploymentRoot: string,
 ): Promise<Array<{ name: string; path: string }>> {
   const references: Array<{ name: string; path: string }> = [];
-  const files = await collectSourceFiles(deploymentRoot, 0, 200);
+  const files = dedupeStrings((await Promise.all(
+    uniquePaths([deploymentRoot, projectRoot]).map((root) => collectSourceFiles(root, 0, 200)),
+  )).flat());
 
   for (const file of files) {
     const raw = await fs.readFile(file, "utf8");
@@ -484,7 +486,7 @@ function isSensitiveEnvName(name: string): boolean {
 }
 
 function isConnectionEnvName(name: string): boolean {
-  return /(?:DATABASE_URL|POSTGRES_URL|MYSQL_URL|MONGODB_URL|REDIS_URL|RABBITMQ_URL|ELASTICSEARCH_URL|S3_ENDPOINT|AWS_)/.test(name);
+  return /(?:DATABASE_URL|DATABASE_URI|DB_URL|DB_HOST|DB_NAME|DB_USER|POSTGRES_URL|POSTGRES_HOST|MYSQL_URL|MYSQL_HOST|MONGODB_URL|MONGODB_URI|MONGO_URL|REDIS_URL|REDIS_HOST|RABBITMQ_URL|AMQP_URL|ELASTICSEARCH_URL|S3_ENDPOINT|AWS_|SPRING_DATASOURCE_|SQLALCHEMY_DATABASE_URI|JDBC_)/.test(name);
 }
 
 function toEnvVariable(name: string, value: EnvAccumulator extends Map<string, infer V> ? V : never): DeploymentEnvVariable {
@@ -528,6 +530,10 @@ async function safeReadDir(directory: string): Promise<import("node:fs").Dirent[
 
 function uniquePaths(paths: string[]): string[] {
   return [...new Set(paths.map((value) => path.resolve(value)))];
+}
+
+function dedupeStrings(values: string[]): string[] {
+  return [...new Set(values)];
 }
 
 function dedupeEnvFiles(

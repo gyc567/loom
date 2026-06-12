@@ -33,6 +33,7 @@ async function main() {
   await verifyHealthcheckCandidateSelection(join(root, "healthcheck-candidates"));
   await verifyExistingComposeServiceSelection(join(root, "existing-compose-service-selection"));
   await verifyBootstrapDiagnostics(join(root, "bootstrap-diagnostics"));
+  await verifyNestedBootstrapDiagnostics(join(root, "nested-bootstrap-diagnostics"));
   await verifyRepairDiagnostics(join(root, "repair-diagnostics"));
   await verifyDeploymentAssetRepairAutoRunnableInstruction(join(root, "deployment-asset-repair-auto-runnable"));
   await verifyRegistryNetworkRepair(join(root, "registry-network-repair"));
@@ -40,6 +41,7 @@ async function main() {
   await verifyRuntimeContractPromotesRootWorkspaceWhenChildrenAreSourceOnly(join(root, "runtime-contract-root-workspace"));
   await verifyRuntimeContractSuppressesHeuristicDependencyServices(join(root, "runtime-contract-suppresses-heuristic-deps"));
   await verifyRuntimeContractDerivesDependencyServicesFromEnvironment(join(root, "runtime-contract-env-deps"));
+  await verifyRuntimeContractUsesDetectedSqlServiceForGenericDatasource(join(root, "runtime-contract-generic-datasource"));
   await verifyStaleRuntimeContractSpecReprepare(join(root, "runtime-contract-stale-reprepare"));
   await verifyDeployUsesPreviousCompletedPhaseRuntimeContract(join(root, "runtime-contract-previous-completed-phase"));
   await verifyDeployRunDockerUnavailableWritesRepairRequest(join(root, "docker-unavailable-repair"));
@@ -949,6 +951,37 @@ async function verifyBootstrapDiagnostics(projectRoot) {
   assert.match(spec.bootstrap.warnings.join("\n"), /does not run migrations automatically/);
 }
 
+async function verifyNestedBootstrapDiagnostics(projectRoot) {
+  await mkdir(join(projectRoot, "apps/api/prisma"), { recursive: true });
+  await mkdir(join(projectRoot, "apps/api/src/main/resources/db/migration"), { recursive: true });
+  await writePackage(projectRoot, {
+    scripts: {
+      start: "node server.js",
+    },
+    dependencies: {
+      express: "^4.18.0",
+    },
+  });
+  await writeFile(join(projectRoot, "server.js"), "console.log('ok')\n", "utf8");
+  await writeFile(join(projectRoot, "apps/api/package.json"), `${JSON.stringify({
+    scripts: {
+      migrate: "prisma migrate deploy",
+    },
+    dependencies: {
+      prisma: "^6.0.0",
+    },
+  }, null, 2)}\n`, "utf8");
+  await writeFile(join(projectRoot, "apps/api/prisma/schema.prisma"), "datasource db { provider = \"mysql\" url = env(\"DATABASE_URL\") }\n", "utf8");
+  await writeFile(join(projectRoot, "apps/api/src/main/resources/db/migration/V1__init.sql"), "select 1;\n", "utf8");
+
+  const envelope = runDeployPrepare(projectRoot);
+  assert.equal(envelope.ok, true);
+
+  const spec = JSON.parse(await readFile(join(projectRoot, ".loom/deployment/specs/local.json"), "utf8"));
+  assert.ok(spec.bootstrap.tasks.some((task) => task.kind === "prisma" && task.command === "cd \"apps/api\" && npx prisma migrate deploy"));
+  assert.ok(spec.bootstrap.tasks.some((task) => task.kind === "flyway" && task.command === "cd \"apps/api\" && flyway migrate"));
+}
+
 async function verifyRepairDiagnostics(projectRoot) {
   await writePackage(projectRoot, {
     scripts: {
@@ -1337,7 +1370,7 @@ async function verifyRuntimeContractDerivesDependencyServicesFromEnvironment(pro
   });
   await writeFile(join(projectRoot, "server.js"), "console.log(process.env.SPRING_DATASOURCE_URL)\n", "utf8");
   await writeAcceptedRuntimeDelivery(projectRoot, {
-    runtimeKind: "spring_boot_serves_vite_static",
+    runtimeKind: "spring_boot_postgres_serves_vite_static",
     startPort: 4173,
     buildCommand: "npm run build",
     startCommand: "npm run start",
@@ -1375,6 +1408,56 @@ async function verifyRuntimeContractDerivesDependencyServicesFromEnvironment(pro
   const compose = await readFile(join(projectRoot, ".loom/deployment/specs/generated/compose.yaml"), "utf8");
   assert.match(compose, /postgres:16-alpine/);
   assert.match(compose, /SPRING_DATASOURCE_URL: "jdbc:postgresql:\/\/postgres:5432\/loom"/);
+}
+
+async function verifyRuntimeContractUsesDetectedSqlServiceForGenericDatasource(projectRoot) {
+  await mkdir(join(projectRoot, "src/main/resources"), { recursive: true });
+  await writeFile(join(projectRoot, "pom.xml"), [
+    "<project>",
+    "  <properties>",
+    "    <java.version>21</java.version>",
+    "  </properties>",
+    "  <dependencies>",
+    "    <dependency>",
+    "      <groupId>com.mysql</groupId>",
+    "      <artifactId>mysql-connector-j</artifactId>",
+    "    </dependency>",
+    "  </dependencies>",
+    "</project>",
+    "",
+  ].join("\n"), "utf8");
+  await writeFile(join(projectRoot, "src/main/resources/application.properties"), "spring.datasource.url=${SPRING_DATASOURCE_URL}\n", "utf8");
+  await writeAcceptedRuntimeDelivery(projectRoot, {
+    runtimeKind: "spring_boot_serves_static",
+    startPort: 8080,
+    buildCommand: "mvn -DskipTests package",
+    startCommand: "java -jar target/demo.jar",
+    previewPath: "/",
+    healthPath: "/actuator/health",
+    frontendOutputDir: "dist",
+    environment: {
+      required: [
+        "SPRING_DATASOURCE_URL",
+        "SPRING_DATASOURCE_USERNAME",
+        "SPRING_DATASOURCE_PASSWORD",
+      ],
+      optional: ["PORT"],
+    },
+  });
+
+  const prepare = runDeployPrepare(projectRoot);
+  assert.equal(prepare.ok, true);
+
+  const spec = JSON.parse(await readFile(join(projectRoot, ".loom/deployment/specs/local.json"), "utf8"));
+  assert.equal(spec.runtimeContract.dependencyServices.length, 0);
+  assert.ok(spec.detectedStack.services.some((service) => service.kind === "mysql"));
+  assert.ok(!spec.detectedStack.services.some((service) => service.kind === "postgres"));
+  assert.ok(spec.environment.provided.includes("SPRING_DATASOURCE_URL"));
+
+  const compose = await readFile(join(projectRoot, ".loom/deployment/specs/generated/compose.yaml"), "utf8");
+  assert.match(compose, /mysql:8/);
+  assert.match(compose, /SPRING_DATASOURCE_URL: "jdbc:mysql:\/\/mysql:3306\/loom"/);
+  assert.doesNotMatch(compose, /postgres:16-alpine/);
 }
 
 async function verifyStaleRuntimeContractSpecReprepare(projectRoot) {

@@ -3,6 +3,23 @@ import path from "node:path";
 import { pathExists } from "../state/fs";
 import type { DeploymentBootstrapDiagnostics, DeploymentBootstrapTask, DetectedStack } from "./types";
 
+const BOOTSTRAP_IGNORED_DIRECTORIES = new Set([
+  ".git",
+  ".loom",
+  "node_modules",
+  "vendor",
+  ".venv",
+  "venv",
+  "__pycache__",
+  "target",
+  "build",
+  "dist",
+  "coverage",
+  "tmp",
+  "log",
+]);
+const BOOTSTRAP_MAX_DEPTH = 8;
+
 export async function analyzeDeploymentBootstrap(input: {
   deploymentRoot: string;
   stack: DetectedStack;
@@ -10,55 +27,61 @@ export async function analyzeDeploymentBootstrap(input: {
   const tasks: DeploymentBootstrapTask[] = [];
   const warnings: string[] = [];
 
-  if (await hasPrisma(input.deploymentRoot)) {
-    tasks.push({
+  const prismaRoot = await findPrismaRoot(input.deploymentRoot);
+  if (prismaRoot) {
+    pushTask(tasks, {
       kind: "prisma",
-      command: packageManagerRun(input.stack.packageManager, "prisma migrate deploy"),
+      command: commandInDirectory(input.deploymentRoot, prismaRoot, packageManagerRun(input.stack.packageManager, "prisma migrate deploy")),
       automatic: false,
       reason: "Prisma schema detected; databases may require migrations before the app can serve requests.",
     });
   }
 
-  if (input.stack.framework === "django" && await hasFile(input.deploymentRoot, "manage.py")) {
-    tasks.push({
+  const djangoRoot = await findDirectoryWithFile(input.deploymentRoot, "manage.py");
+  if (input.stack.framework === "django" && djangoRoot) {
+    pushTask(tasks, {
       kind: "django",
-      command: "python manage.py migrate --noinput",
+      command: commandInDirectory(input.deploymentRoot, djangoRoot, "python manage.py migrate --noinput"),
       automatic: false,
       reason: "Django manage.py detected; pending migrations can surface as missing-table errors at boot or first request.",
     });
   }
 
-  if (input.stack.framework === "rails" && await hasDirectory(input.deploymentRoot, "db/migrate")) {
-    tasks.push({
+  const railsRoot = await findDirectoryWithPath(input.deploymentRoot, "db/migrate");
+  if (input.stack.framework === "rails" && railsRoot) {
+    pushTask(tasks, {
       kind: "rails",
-      command: "bundle exec rails db:migrate",
+      command: commandInDirectory(input.deploymentRoot, railsRoot, "bundle exec rails db:migrate"),
       automatic: false,
       reason: "Rails migrations detected; pending migrations can cause boot or request failures.",
     });
   }
 
-  if (input.stack.framework === "laravel" && await hasDirectory(input.deploymentRoot, "database/migrations")) {
-    tasks.push({
+  const laravelRoot = await findDirectoryWithPath(input.deploymentRoot, "database/migrations");
+  if (input.stack.framework === "laravel" && laravelRoot) {
+    pushTask(tasks, {
       kind: "laravel",
-      command: "php artisan migrate --force",
+      command: commandInDirectory(input.deploymentRoot, laravelRoot, "php artisan migrate --force"),
       automatic: false,
       reason: "Laravel migrations detected; pending migrations can cause database/table failures.",
     });
   }
 
-  if (await containsAny(input.deploymentRoot, ["flyway.conf", "flyway.toml"])) {
-    tasks.push({
+  const flywayRoot = await findFlywayRoot(input.deploymentRoot);
+  if (flywayRoot) {
+    pushTask(tasks, {
       kind: "flyway",
-      command: "flyway migrate",
+      command: commandInDirectory(input.deploymentRoot, flywayRoot, flywayCommand(input.stack)),
       automatic: false,
       reason: "Flyway configuration detected; schema migrations may need to run before deployment is healthy.",
     });
   }
 
-  if (await containsAny(input.deploymentRoot, ["liquibase.properties", "liquibase.yml", "liquibase.yaml"])) {
-    tasks.push({
+  const liquibaseRoot = await findLiquibaseRoot(input.deploymentRoot);
+  if (liquibaseRoot) {
+    pushTask(tasks, {
       kind: "liquibase",
-      command: "liquibase update",
+      command: commandInDirectory(input.deploymentRoot, liquibaseRoot, liquibaseCommand(input.stack)),
       automatic: false,
       reason: "Liquibase configuration detected; schema migrations may need to run before deployment is healthy.",
     });
@@ -71,48 +94,153 @@ export async function analyzeDeploymentBootstrap(input: {
   return { tasks, warnings };
 }
 
-async function hasPrisma(root: string): Promise<boolean> {
-  return hasFile(root, "prisma/schema.prisma") || containsPackageScript(root, /prisma\s+migrate|prisma\s+db\s+push/i);
+async function findPrismaRoot(root: string): Promise<string | null> {
+  const schema = await findDirectoryWithPath(root, "prisma/schema.prisma");
+  if (schema) {
+    return schema;
+  }
+  return findPackageScriptDirectory(root, /prisma\s+migrate|prisma\s+db\s+push/i);
 }
 
-async function containsPackageScript(root: string, pattern: RegExp): Promise<boolean> {
-  const packagePath = path.join(root, "package.json");
-  if (!(await pathExists(packagePath))) {
-    return false;
-  }
-  try {
-    const pkg = JSON.parse(await fs.readFile(packagePath, "utf8")) as { scripts?: Record<string, unknown> };
-    return Object.values(pkg.scripts ?? {}).some((script) => typeof script === "string" && pattern.test(script));
-  } catch {
-    return false;
-  }
+async function findFlywayRoot(root: string): Promise<string | null> {
+  return (
+    await findDirectoryWithAnyFile(root, ["flyway.conf", "flyway.toml"]) ??
+    await findDirectoryWithPath(root, "src/main/resources/db/migration")
+  );
 }
 
-async function containsAny(root: string, names: string[]): Promise<boolean> {
-  for (const name of names) {
-    if (await pathExists(path.join(root, name))) {
-      return true;
+async function findLiquibaseRoot(root: string): Promise<string | null> {
+  return (
+    await findDirectoryWithAnyFile(root, ["liquibase.properties", "liquibase.yml", "liquibase.yaml"]) ??
+    await findDirectoryWithPath(root, "src/main/resources/db/changelog")
+  );
+}
+
+async function findPackageScriptDirectory(root: string, pattern: RegExp): Promise<string | null> {
+  const packageFiles = await collectFiles(root, 0, BOOTSTRAP_MAX_DEPTH, 200, (relativePath) => relativePath.endsWith("package.json"));
+  for (const packagePath of packageFiles) {
+    try {
+      const pkg = JSON.parse(await fs.readFile(packagePath, "utf8")) as { scripts?: Record<string, unknown> };
+      if (Object.values(pkg.scripts ?? {}).some((script) => typeof script === "string" && pattern.test(script))) {
+        return path.dirname(packagePath);
+      }
+    } catch {
+      // Ignore malformed package files during diagnostic bootstrap discovery.
     }
   }
-  return false;
+  return null;
 }
 
-async function hasFile(root: string, relativePath: string): Promise<boolean> {
+async function findDirectoryWithFile(root: string, fileName: string): Promise<string | null> {
+  const file = (await collectFiles(root, 0, BOOTSTRAP_MAX_DEPTH, 200, (relativePath) => path.basename(relativePath) === fileName))[0];
+  return file ? path.dirname(file) : null;
+}
+
+async function findDirectoryWithAnyFile(root: string, fileNames: string[]): Promise<string | null> {
+  const fileNameSet = new Set(fileNames);
+  const file = (await collectFiles(root, 0, BOOTSTRAP_MAX_DEPTH, 200, (relativePath) => fileNameSet.has(path.basename(relativePath))))[0];
+  return file ? path.dirname(file) : null;
+}
+
+async function findDirectoryWithPath(root: string, relativeSuffix: string): Promise<string | null> {
+  const normalizedSuffix = normalizeRelativePath(relativeSuffix);
+  if (await pathExists(path.join(root, relativeSuffix))) {
+    return root;
+  }
+  const match = (await collectFiles(root, 0, BOOTSTRAP_MAX_DEPTH, 300, (relativePath) => {
+    const normalizedPath = normalizeRelativePath(relativePath);
+    return normalizedPath.endsWith(normalizedSuffix) || normalizedPath.includes(`${normalizedSuffix}/`);
+  }))[0];
+  if (!match) {
+    return null;
+  }
+  const normalizedMatch = normalizeRelativePath(path.relative(root, match));
+  const suffixIndex = normalizedMatch.endsWith(normalizedSuffix)
+    ? normalizedMatch.length - normalizedSuffix.length
+    : normalizedMatch.indexOf(`${normalizedSuffix}/`);
+  const prefix = normalizedMatch.slice(0, Math.max(0, suffixIndex)).replace(/\/$/, "");
+  return prefix ? path.join(root, ...prefix.split("/")) : root;
+}
+
+async function collectFiles(
+  root: string,
+  depth: number,
+  maxDepth: number,
+  limit: number,
+  predicate: (relativePath: string) => boolean,
+  baseRoot = root,
+): Promise<string[]> {
+  if (depth > maxDepth || limit <= 0) {
+    return [];
+  }
+
+  const entries = await safeReadDir(root);
+  const files: string[] = [];
+  for (const entry of entries) {
+    if (files.length >= limit) {
+      break;
+    }
+    if (entry.isDirectory()) {
+      if (!BOOTSTRAP_IGNORED_DIRECTORIES.has(entry.name)) {
+        files.push(...await collectFiles(path.join(root, entry.name), depth + 1, maxDepth, limit - files.length, predicate, baseRoot));
+      }
+      continue;
+    }
+    if (!entry.isFile()) {
+      continue;
+    }
+    const filePath = path.join(root, entry.name);
+    const relativePath = normalizeRelativePath(path.relative(baseRoot, filePath));
+    if (predicate(relativePath) || predicate(entry.name)) {
+      files.push(filePath);
+    }
+  }
+  return files.slice(0, limit);
+}
+
+async function safeReadDir(directory: string): Promise<import("node:fs").Dirent[]> {
   try {
-    const stat = await fs.stat(path.join(root, relativePath));
-    return stat.isFile();
+    return await fs.readdir(directory, { withFileTypes: true });
   } catch {
-    return false;
+    return [];
   }
 }
 
-async function hasDirectory(root: string, relativePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(path.join(root, relativePath));
-    return stat.isDirectory();
-  } catch {
-    return false;
+function commandInDirectory(root: string, directory: string, command: string): string {
+  const relative = normalizeRelativePath(path.relative(root, directory));
+  return relative && relative !== "."
+    ? `cd ${JSON.stringify(relative)} && ${command}`
+    : command;
+}
+
+function flywayCommand(stack: DetectedStack): string {
+  if (stack.kind === "java" && stack.packageManager === "maven") {
+    return "mvn -DskipTests flyway:migrate";
   }
+  if (stack.kind === "java" && stack.packageManager === "gradle") {
+    return "gradle flywayMigrate";
+  }
+  return "flyway migrate";
+}
+
+function liquibaseCommand(stack: DetectedStack): string {
+  if (stack.kind === "java" && stack.packageManager === "maven") {
+    return "mvn -DskipTests liquibase:update";
+  }
+  if (stack.kind === "java" && stack.packageManager === "gradle") {
+    return "gradle liquibaseUpdate";
+  }
+  return "liquibase update";
+}
+
+function pushTask(tasks: DeploymentBootstrapTask[], task: DeploymentBootstrapTask): void {
+  if (!tasks.some((current) => current.kind === task.kind && current.command === task.command)) {
+    tasks.push(task);
+  }
+}
+
+function normalizeRelativePath(value: string): string {
+  return value.split(path.sep).join("/");
 }
 
 function packageManagerRun(packageManager: DetectedStack["packageManager"], command: string): string {

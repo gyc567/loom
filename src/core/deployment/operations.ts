@@ -1581,7 +1581,7 @@ function applyRuntimeContractToStack(
     outputDirectory: runtimeContract.frontendOutputDir ?? stack.outputDirectory,
     port: runtimeContract.port ?? stack.port,
     services: runtimeContract.dependencyServicePolicy === "contract_only"
-      ? runtimeContract.dependencyServices
+      ? contractOnlyDependencyServices(runtimeContract, stack.services)
       : mergeDependencyServices(stack.services, runtimeContract.dependencyServices),
   };
 }
@@ -1728,6 +1728,77 @@ function mergeDependencyServices(
     byKind.set(service.kind, service);
   }
   return [...byKind.values()];
+}
+
+function contractOnlyDependencyServices(
+  runtimeContract: DeploymentSpec["runtimeContract"],
+  detected: DeploymentSpec["detectedStack"]["services"],
+): DeploymentSpec["detectedStack"]["services"] {
+  if (runtimeContract.dependencyServices.length > 0) {
+    return runtimeContract.dependencyServices;
+  }
+  if (!runtimeContractRequestsSqlDatabase(runtimeContract)) {
+    return [];
+  }
+  return detected
+    .filter((service) => ["postgres", "mysql"].includes(service.kind))
+    .map((service) => serviceWithRuntimeContractConnectionEnv(service, runtimeContract));
+}
+
+function runtimeContractRequestsSqlDatabase(runtimeContract: DeploymentSpec["runtimeContract"]): boolean {
+  const signals = [
+    runtimeContract.runtimeKind,
+    runtimeContract.buildCommand,
+    runtimeContract.startCommand,
+    ...runtimeContract.environment.required,
+    ...runtimeContract.environment.optional,
+    ...runtimeContract.apiPaths,
+  ]
+    .filter((value): value is string => typeof value === "string")
+    .join("\n")
+    .toLowerCase();
+  return /database_url|database_uri|spring_datasource|spring\.datasource|datasource_url|db_url|jdbc/.test(signals);
+}
+
+function serviceWithRuntimeContractConnectionEnv(
+  service: DeploymentSpec["detectedStack"]["services"][number],
+  runtimeContract: DeploymentSpec["runtimeContract"],
+): DeploymentSpec["detectedStack"]["services"][number] {
+  const requested = new Set([
+    ...runtimeContract.environment.required,
+    ...runtimeContract.environment.optional,
+  ]);
+  if (
+    !requested.has("SPRING_DATASOURCE_URL") &&
+    !requested.has("SPRING_DATASOURCE_USERNAME") &&
+    !requested.has("SPRING_DATASOURCE_PASSWORD")
+  ) {
+    return service;
+  }
+
+  if (service.kind === "postgres") {
+    return {
+      ...service,
+      connectionEnv: {
+        ...service.connectionEnv,
+        SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres:5432/loom",
+        SPRING_DATASOURCE_USERNAME: "loom",
+        SPRING_DATASOURCE_PASSWORD: "loom",
+      },
+    };
+  }
+  if (service.kind === "mysql") {
+    return {
+      ...service,
+      connectionEnv: {
+        ...service.connectionEnv,
+        SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/loom",
+        SPRING_DATASOURCE_USERNAME: "loom",
+        SPRING_DATASOURCE_PASSWORD: "loom",
+      },
+    };
+  }
+  return service;
 }
 
 function deploymentStartCommand(

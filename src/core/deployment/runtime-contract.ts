@@ -96,7 +96,7 @@ function contractDependencyServices(
     .toLowerCase();
   const services: DeploymentRuntimeContract["dependencyServices"] = [];
 
-  if (/postgres|postgresql|pgsql|jdbc:postgresql|spring_datasource/.test(signals)) {
+  if (/postgres|postgresql|pgsql|jdbc:postgresql/.test(signals)) {
     services.push({
       ...serviceDefinition("postgres", "Declared by RuntimeDeliveryContract environment/runtime signals."),
       connectionEnv: springDatasourceEnv("postgres"),
