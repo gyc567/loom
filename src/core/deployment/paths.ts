@@ -9,6 +9,8 @@ export type DeploymentPaths = {
   evidenceDir: string;
   specFile: string;
   stateFile: string;
+  activeOperationFile: string;
+  staleOperationFile: string;
   logFile: string;
   repairFile: string;
   failureFile: string;
@@ -37,6 +39,8 @@ export function getDeploymentPaths(projectRoot: string): DeploymentPaths {
     evidenceDir,
     specFile: path.join(specsDir, "local.json"),
     stateFile: path.join(stateDir, "local.json"),
+    activeOperationFile: path.join(stateDir, "active-operation.json"),
+    staleOperationFile: path.join(stateDir, "last-stale-operation.json"),
     logFile: path.join(logsDir, "local.log"),
     repairFile: path.join(stateDir, "repair-request.json"),
     failureFile: path.join(stateDir, "latest-failure.json"),

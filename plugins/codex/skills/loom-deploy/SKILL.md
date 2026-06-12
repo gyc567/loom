@@ -54,6 +54,14 @@ For a plain `@loom deploy` request, run the full local workflow:
 LOOM_AGENT_PROFILE=codex LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" deploy run --project-root /abs/project
 ```
 
+## Active Deploy Operation
+
+While `deploy run`, `deploy up`, `deploy prepare`, `deploy down`, or `deploy bootstrap --confirm` is running, do not start another mutating deploy command. Observation is limited to `deploy status`, `deploy inspect`, and `deploy logs`.
+
+Do not run raw `docker compose`, `docker build`, `docker run`, or manual container inspection as a substitute for Loom deploy observation. Do not kill, `pkill`, or stop deploy, Docker Compose, Docker build, or Loom-managed deployment processes.
+
+If the CLI returns `DEPLOY_OPERATION_ACTIVE`, report the active operation's `command`, `phase`, `elapsedMs`, and `logRef`. Then wait for user instruction or observe with `deploy status`, `deploy inspect`, or `deploy logs`; do not take over the running operation.
+
 If `deploy run` returns `completed: true`, report the URL plus preview verification result and health/status. Do not run raw `docker compose`, `docker build`, `docker run`, or manually recreate loom containers after a successful deploy command. Use `loom deploy status`, `loom deploy inspect`, `loom deploy validate`, `loom deploy logs`, or `loom deploy down` for follow-up checks.
 
 If `deploy run` returns `completed: false`, inspect `data.repair`:

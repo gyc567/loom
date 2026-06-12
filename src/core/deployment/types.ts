@@ -33,6 +33,52 @@ export type DeploymentHealthcheckInput = {
   timeoutMs?: number;
 };
 
+export type DeploymentOperationCommand =
+  | "deploy.run"
+  | "deploy.prepare"
+  | "deploy.up"
+  | "deploy.down"
+  | "deploy.bootstrap";
+
+export type DeploymentOperationPhase =
+  | "preparing"
+  | "building"
+  | "starting"
+  | "validating"
+  | "checking_status"
+  | "stopping"
+  | "bootstrapping"
+  | "completed"
+  | "failed";
+
+export type DeploymentActiveOperation = {
+  schemaVersion: 1;
+  operationId: string;
+  command: DeploymentOperationCommand;
+  phase: DeploymentOperationPhase;
+  pid: number;
+  projectRoot: string;
+  startedAt: string;
+  updatedAt: string;
+  logRef: string;
+  specRef: string | null;
+  status: "running" | "stale";
+};
+
+export type DeploymentActiveOperationView = DeploymentActiveOperation & {
+  operationActive: true;
+  elapsedMs: number;
+  activeOperationRef: string;
+  allowedCommands: readonly ["deploy status", "deploy inspect", "deploy logs"];
+  forbiddenActions: readonly [
+    "deploy run",
+    "deploy up",
+    "deploy down",
+    "raw docker compose",
+    "kill process",
+  ];
+};
+
 export type DeploymentComposePort = {
   hostPort: number | null;
   containerPort: number;
