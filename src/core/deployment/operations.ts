@@ -736,9 +736,7 @@ export async function deployStatus(input: { projectRoot: string }): Promise<Depl
     const activeSpec = spec ?? await readDeploymentSpec(input.projectRoot);
     const composePath = path.resolve(input.projectRoot, activeSpec.files.composePath);
     const expectedContainerName = containerNameFor(activeSpec);
-    const inspected = activeSpec.provider === "compose-existing" && activeSpec.compose.selectedService
-      ? await resolveDeploymentContainer(input.projectRoot, composePath, activeSpec)
-      : await inspectContainer(input.projectRoot, expectedContainerName);
+    const inspected = await resolveDeploymentContainer(input.projectRoot, composePath, activeSpec);
     const health = inspected.running ? await checkDeploymentPreview(activeSpec) : disabledHealth(state.url);
     const healthSpec = applyHealthyPath(activeSpec, health);
     if (healthSpec !== activeSpec) {
@@ -1354,12 +1352,13 @@ async function resolveDeploymentContainer(
   composePath: string,
   spec: DeploymentSpec,
 ): Promise<{ containerId: string | null; running: boolean; containerName: string }> {
-  if (spec.provider === "compose-existing" && spec.compose.selectedService) {
-    const container = await findComposeServiceContainer(projectRoot, composePath, spec.compose.selectedService);
+  const serviceName = deploymentAppServiceName(spec);
+  const container = await findComposeServiceContainer(projectRoot, composePath, serviceName);
+  if (container.containerId) {
     return {
       containerId: container.containerId,
       running: container.running,
-      containerName: container.containerName ?? spec.compose.selectedService,
+      containerName: container.containerName ?? serviceName,
     };
   }
 

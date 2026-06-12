@@ -21,6 +21,7 @@ async function main() {
   await verifyDependencyServiceTokenBoundaries(join(root, "dependency-service-token-boundaries"));
   await verifyGoTemplate(join(root, "go-template"));
   await verifyJavaMavenTemplate(join(root, "java-maven-template"));
+  await verifyJavaMixedFrontendTemplate(join(root, "java-mixed-frontend-template"));
   await verifyDotnetAspnetTemplate(join(root, "dotnet-aspnet-template"));
   await verifyPhpLaravelTemplate(join(root, "php-laravel-template"));
   await verifyRubyRailsTemplate(join(root, "ruby-rails-template"));
@@ -87,6 +88,7 @@ async function verifyGeneratedTemplate(projectRoot) {
   assert.match(compose, /postgres:16-alpine/);
   assert.match(compose, /redis:7-alpine/);
   assert.match(compose, /healthcheck:/);
+  assert.doesNotMatch(compose, /container_name:/);
   assert.doesNotMatch(compose, /ports:\n\s+- "5432:5432"/);
 
   const validation = runDeployValidate(projectRoot);
@@ -533,6 +535,60 @@ async function verifyJavaMavenTemplate(projectRoot) {
   const compose = await readFile(join(projectRoot, ".loom/deployment/specs/generated/compose.yaml"), "utf8");
   assert.match(compose, /SERVER_PORT: "9091"/);
   assert.match(compose, /postgres:16-alpine/);
+}
+
+async function verifyJavaMixedFrontendTemplate(projectRoot) {
+  await mkdir(join(projectRoot, "src/main/resources"), { recursive: true });
+  await mkdir(join(projectRoot, "apps/web"), { recursive: true });
+  await writeFile(join(projectRoot, "pom.xml"), [
+    "<project>",
+    "  <properties>",
+    "    <java.version>21</java.version>",
+    "  </properties>",
+    "  <dependencies>",
+    "    <dependency>",
+    "      <groupId>org.springframework.boot</groupId>",
+    "      <artifactId>spring-boot-starter-web</artifactId>",
+    "    </dependency>",
+    "  </dependencies>",
+    "</project>",
+    "",
+  ].join("\n"), "utf8");
+  await writeFile(join(projectRoot, "src/main/resources/application.properties"), "server.port=8088\n", "utf8");
+  await writeFile(join(projectRoot, "apps/web/package.json"), `${JSON.stringify({
+    scripts: {
+      build: "vite build",
+    },
+    dependencies: {
+      vite: "^6.0.0",
+    },
+  }, null, 2)}\n`, "utf8");
+  await writeAcceptedRuntimeDelivery(projectRoot, {
+    runtimeKind: "spring_boot_serves_vite_static",
+    startPort: 8088,
+    buildCommand: "npm --prefix apps/web run build && mvn -DskipTests package",
+    startCommand: "java -jar target/demo.jar --spring.profiles.active=local",
+    previewPath: "/",
+    healthPath: "/actuator/health",
+    frontendOutputDir: "apps/web/dist",
+  });
+
+  const envelope = runDeployPrepare(projectRoot);
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.data.detectedStack.kind, "java");
+  assert.equal(envelope.data.detectedStack.buildCommand, "npm --prefix apps/web run build && mvn -DskipTests package");
+
+  const dockerfile = await readFile(join(projectRoot, ".loom/deployment/specs/generated/Dockerfile"), "utf8");
+  assert.match(dockerfile, /USER root/);
+  assert.match(dockerfile, /apt-get install -y --no-install-recommends curl ca-certificates/);
+  assert.match(dockerfile, /apt-get install -y --no-install-recommends nodejs/);
+  assert.match(dockerfile, /corepack enable/);
+  assert.match(dockerfile, /RUN npm --prefix apps\/web run build && mvn -DskipTests package/);
+  assert.match(dockerfile, /find \. -type f -name '\*\.jar'/);
+  assert.match(dockerfile, /CMD \["sh","-c","java -jar \/app\/app\.jar --spring\.profiles\.active=local"\]/);
+
+  const compose = await readFile(join(projectRoot, ".loom/deployment/specs/generated/compose.yaml"), "utf8");
+  assert.doesNotMatch(compose, /container_name:/);
 }
 
 async function verifyDotnetAspnetTemplate(projectRoot) {
