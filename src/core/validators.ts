@@ -671,10 +671,21 @@ function workflowClosureRequirementIdsFromTaskRequest(request: TaskExecutionRequ
   if (!guidance || typeof guidance !== "object" || Array.isArray(guidance)) {
     return [];
   }
-  const requirements = (guidance as Record<string, unknown>).workflowClosureRequirements;
-  if (!Array.isArray(requirements)) {
-    return [];
+  const closureRefs = (guidance as Record<string, unknown>).closureRequirementRefs;
+  if (Array.isArray(closureRefs)) {
+    return closureRefs
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (typeof item === "object" && item !== null && !Array.isArray(item)) {
+          const closureId = (item as Record<string, unknown>).closureId;
+          return typeof closureId === "string" ? closureId : null;
+        }
+        return null;
+      })
+      .filter((item): item is string => typeof item === "string" && item.length > 0);
   }
+  const requirements = (guidance as Record<string, unknown>).workflowClosureRequirements;
+  if (!Array.isArray(requirements)) return [];
   return requirements
     .map((item) => typeof item === "object" && item !== null && !Array.isArray(item) ? (item as Record<string, unknown>).closureId : null)
     .filter((item): item is string => typeof item === "string" && item.length > 0);
