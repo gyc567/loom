@@ -239,6 +239,7 @@ function failureOwnerFor(
   if (
     failureKind === "build_command_failed" ||
     failureKind === "start_command_failed" ||
+    failureKind === "application_startup_failed" ||
     failureKind === "http_probe_failed" ||
     failureKind === "preview_not_verified" ||
     (failureKind === "healthcheck" && editableFilesFor(spec, failureKind).length === 0)
@@ -335,6 +336,7 @@ function editableFilesFor(spec: DeploymentSpec, failureKind: DeploymentFailureKi
     failureKind === "runtime_contract_mismatch" ||
     failureKind === "build_command_failed" ||
     failureKind === "start_command_failed" ||
+    failureKind === "application_startup_failed" ||
     failureKind === "http_probe_failed" ||
     failureKind === "preview_not_verified"
   ) {
@@ -375,6 +377,7 @@ function instructionFor(spec: DeploymentSpec, failureKind: DeploymentFailureKind
     case "runtime_contract_mismatch":
     case "build_command_failed":
     case "start_command_failed":
+    case "application_startup_failed":
     case "http_probe_failed":
     case "preview_not_verified":
       return "Deploy cannot repair this by editing generated deployment assets. Route this application-code/runtime delivery failure through repair request --type execution --source deploy using the latest failure report.";
@@ -414,6 +417,13 @@ function failedContractFor(
       workingDirectory: spec.detectedStack.workingDirectory ?? spec.workspace.appPath,
     };
   }
+  if (failureKind === "application_startup_failed") {
+    return {
+      field: "runtime.startup",
+      command: spec.runtimeContract.startCommand ?? spec.detectedStack.startCommand,
+      workingDirectory: spec.detectedStack.workingDirectory ?? spec.workspace.appPath,
+    };
+  }
   return {
     field: failureKind === "healthcheck" ? "httpProbes.healthPath" : "runtime.delivery",
     command: null,
@@ -424,6 +434,7 @@ function failedContractFor(
 function failedAtFor(failureKind: DeploymentFailureKind): string {
   if (failureKind === "build_command_failed") return "runtime_build_command";
   if (failureKind === "start_command_failed") return "runtime_start_command";
+  if (failureKind === "application_startup_failed") return "runtime_application_startup";
   if (failureKind === "http_probe_failed") return "runtime_http_probe";
   if (failureKind === "preview_not_verified") return "runtime_preview_probe";
   if (failureKind === "healthcheck") return "runtime_healthcheck";
@@ -433,6 +444,7 @@ function failedAtFor(failureKind: DeploymentFailureKind): string {
 function logMarkersFor(failureKind: DeploymentFailureKind): string[] {
   if (failureKind === "build_command_failed") return ["LOOM_RUNTIME_BUILD_START"];
   if (failureKind === "start_command_failed") return ["LOOM_RUNTIME_START_COMMAND"];
+  if (failureKind === "application_startup_failed") return ["LOOM_RUNTIME_START_COMMAND"];
   return [];
 }
 

@@ -46,6 +46,7 @@ async function main() {
   await verifyDeployUsesPreviousCompletedPhaseRuntimeContract(join(root, "runtime-contract-previous-completed-phase"));
   await verifyDeployRunDockerUnavailableWritesRepairRequest(join(root, "docker-unavailable-repair"));
   await verifyRuntimeContractStartFailureRoutesToDeliveryRepair(join(root, "runtime-contract-start-failure"));
+  await verifyApplicationStartupFailureRoutesToExecutionRepair(join(root, "application-startup-failure"));
   await verifyRuntimeContractBuildFailureRoutesToDeliveryRepair(join(root, "runtime-contract-build-failure"));
   await verifyHealthcheckOverrides(join(root, "healthcheck-overrides"));
   await verifyBootstrapCommandPreviewAndConfirm(join(root, "bootstrap-command-preview-confirm"));
@@ -1642,6 +1643,59 @@ async function verifyRuntimeContractStartFailureRoutesToDeliveryRepair(projectRo
     "--failure-ref",
     ".loom/deployment/state/latest-failure.json",
   ]);
+}
+
+async function verifyApplicationStartupFailureRoutesToExecutionRepair(projectRoot) {
+  const binDir = join(projectRoot, "mock-bin");
+  await mkdir(binDir, { recursive: true });
+  await writePackage(projectRoot, {
+    scripts: {
+      build: "node -e \"require('fs').mkdirSync('dist', { recursive: true })\"",
+      start: "node dist/server.js",
+    },
+    dependencies: {
+      express: "^4.18.0",
+    },
+  });
+  await writeFile(join(projectRoot, "server.js"), "console.log('ok')\n", "utf8");
+  await writeAcceptedRuntimeDelivery(projectRoot, {
+    startPort: 8080,
+    buildCommand: "npm run build",
+    startCommand: "npm run start",
+    previewPath: "/",
+    healthPath: "/actuator/health",
+    frontendOutputDir: "dist/web",
+  });
+  await writeFile(join(projectRoot, "mock-bin/docker"), [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"compose\" ] && [ \"$4\" = \"config\" ]; then exit 0; fi",
+    "if [ \"$1\" = \"version\" ]; then echo '25.0.0'; exit 0; fi",
+    "if [ \"$1\" = \"compose\" ] && [ \"$4\" = \"up\" ]; then exit 0; fi",
+    "if [ \"$1\" = \"inspect\" ]; then echo 'container-id true'; exit 0; fi",
+    "if [ \"$1\" = \"compose\" ] && [ \"$4\" = \"logs\" ]; then",
+    "  echo 'app | org.springframework.boot.context.event.ApplicationFailedEvent'",
+    "  echo 'app | APPLICATION FAILED TO START'",
+    "  echo 'app | org.flywaydb.core.api.FlywayException: Unsupported Database: PostgreSQL 15.18'",
+    "  exit 0",
+    "fi",
+    "exit 0",
+    "",
+  ].join("\n"), "utf8");
+  await chmod(join(projectRoot, "mock-bin/docker"), 0o755);
+
+  const run = runDeployRun(projectRoot, {
+    PATH: `${binDir}:${process.env.PATH}`,
+  });
+  assert.equal(run.ok, true);
+  assert.equal(run.data.completed, false);
+  assert.equal(run.data.failedPhase, "up");
+  assert.equal(run.data.nextAction, "execution_repair");
+  assert.equal(run.data.repair.failureKind, "application_startup_failed");
+  assert.equal(run.data.repair.failureOwner, "application_code");
+  assert.equal(run.data.repair.repairRoute, "execution_repair");
+  assert.deepEqual(run.data.repair.editableFiles, []);
+  assert.ok(run.data.repair.diagnostics.some((diagnostic) => diagnostic.code === "framework_startup_failed"));
+  assert.ok(run.data.repair.errorWindow.lines.some((line) => /FlywayException|APPLICATION FAILED TO START/.test(line)));
 }
 
 async function verifyRuntimeContractBuildFailureRoutesToDeliveryRepair(projectRoot) {

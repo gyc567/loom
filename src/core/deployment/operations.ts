@@ -583,20 +583,27 @@ export async function deployUp(input: {
   }
 
   const container = await resolveDeploymentContainer(input.projectRoot, composePath, spec);
+  const startupInspection = await inspectDeploymentStartupLogs(input.projectRoot, composePath, spec, "docker compose startup logs");
   if (!container.running) {
+    const serviceNotRunning = `Compose app service ${spec.compose.selectedService ?? spec.serviceName} is not running after docker compose up.`;
+    const failureKind = startupInspection.logValidation.ok
+      ? "container_start"
+      : classifyStartupLogFailure(spec, startupInspection.rawLogs);
     const diagnostics = diagnoseDeploymentFailure({
       spec,
-      stdout: "",
-      stderr: `Compose app service ${spec.compose.selectedService ?? spec.serviceName} is not running after docker compose up.`,
+      stdout: startupInspection.logsResult.stdout,
+      stderr: [serviceNotRunning, startupInspection.logsResult.stderr].filter(Boolean).join("\n"),
     });
     await writeDeploymentRepairRequest({
       projectRoot: input.projectRoot,
       spec,
-      failureKind: "container_start",
-      command: composeCommand(spec, ["ps", spec.compose.selectedService ?? spec.serviceName]),
+      failureKind,
+      command: composeCommand(spec, startupInspection.logValidation.ok
+        ? ["ps", spec.compose.selectedService ?? spec.serviceName]
+        : startupInspection.logsArgs),
       exitCode: 1,
-      stdout: "",
-      stderr: `Compose app service ${spec.compose.selectedService ?? spec.serviceName} is not running after docker compose up.`,
+      stdout: startupInspection.logsResult.stdout,
+      stderr: [serviceNotRunning, startupInspection.logsResult.stderr].filter(Boolean).join("\n"),
       diagnostics,
       previousAttempts: await nextRepairAttempt(input.projectRoot),
     });
@@ -607,27 +614,26 @@ export async function deployUp(input: {
     });
   }
 
-  const logsArgs = composeLogsArgs(spec, "120");
-  const logsResult = await dockerCompose(input.projectRoot, composePath, logsArgs, 30_000);
-  await appendCommandLog(input.projectRoot, "docker compose startup logs", logsResult);
-  const startupLogs = `${logsResult.stdout}${logsResult.stderr ? `\n${logsResult.stderr}` : ""}`;
-  const logValidation = validateStartupLogs(startupLogs);
-  if (!logValidation.ok) {
-    const diagnostics = diagnoseDeploymentFailure({ spec, stdout: logsResult.stdout, stderr: logsResult.stderr });
+  if (!startupInspection.logValidation.ok) {
+    const diagnostics = diagnoseDeploymentFailure({
+      spec,
+      stdout: startupInspection.logsResult.stdout,
+      stderr: startupInspection.logsResult.stderr,
+    });
     await writeDeploymentRepairRequest({
       projectRoot: input.projectRoot,
       spec,
-      failureKind: classifyStartupLogFailure(spec, startupLogs),
-      command: composeCommand(spec, logsArgs),
-      exitCode: logsResult.exitCode,
-      stdout: logsResult.stdout,
-      stderr: logsResult.stderr,
+      failureKind: classifyStartupLogFailure(spec, startupInspection.rawLogs),
+      command: composeCommand(spec, startupInspection.logsArgs),
+      exitCode: startupInspection.logsResult.exitCode,
+      stdout: startupInspection.logsResult.stdout,
+      stderr: startupInspection.logsResult.stderr,
       diagnostics,
       previousAttempts: await nextRepairAttempt(input.projectRoot),
     });
     throw deployValidationFailed("Deployment startup logs contain a fatal error.", {
-      matchedPattern: logValidation.matchedPattern,
-      lines: logValidation.lines.slice(-20),
+      matchedPattern: startupInspection.logValidation.matchedPattern,
+      lines: startupInspection.logValidation.lines.slice(-20),
       diagnostics,
     });
   }
@@ -638,19 +644,25 @@ export async function deployUp(input: {
     await writeDeploymentSpec(input.projectRoot, healthSpec);
   }
   if (health.status === "unhealthy") {
+    const healthLogInspection = await inspectDeploymentStartupLogs(input.projectRoot, composePath, healthSpec, "docker compose healthcheck failure logs");
+    const failureKind = healthLogInspection.logValidation.ok
+      ? "healthcheck"
+      : classifyStartupLogFailure(healthSpec, healthLogInspection.rawLogs);
     const diagnostics = diagnoseDeploymentFailure({
       spec: healthSpec,
-      stdout: "",
-      stderr: health.error ?? `Healthcheck failed for ${health.url ?? spec.runtime.url}.`,
+      stdout: healthLogInspection.logsResult.stdout,
+      stderr: [health.error ?? `Healthcheck failed for ${health.url ?? spec.runtime.url}.`, healthLogInspection.logsResult.stderr].filter(Boolean).join("\n"),
     });
     await writeDeploymentRepairRequest({
       projectRoot: input.projectRoot,
       spec: healthSpec,
-      failureKind: "healthcheck",
-      command: ["GET", healthSpec.runtime.healthcheck.url ?? healthSpec.runtime.url],
+      failureKind,
+      command: failureKind === "healthcheck"
+        ? ["GET", healthSpec.runtime.healthcheck.url ?? healthSpec.runtime.url]
+        : composeCommand(healthSpec, healthLogInspection.logsArgs),
       exitCode: health.statusCode ?? 1,
-      stdout: "",
-      stderr: health.error ?? `Healthcheck failed for ${health.url ?? spec.runtime.url}.`,
+      stdout: healthLogInspection.logsResult.stdout,
+      stderr: [health.error ?? `Healthcheck failed for ${health.url ?? spec.runtime.url}.`, healthLogInspection.logsResult.stderr].filter(Boolean).join("\n"),
       diagnostics,
       previousAttempts: await nextRepairAttempt(input.projectRoot),
     });
@@ -665,19 +677,25 @@ export async function deployUp(input: {
     });
   }
   if (preview.status !== "healthy") {
+    const previewLogInspection = await inspectDeploymentStartupLogs(input.projectRoot, composePath, healthSpec, "docker compose preview failure logs");
+    const failureKind = previewLogInspection.logValidation.ok
+      ? "preview_not_verified"
+      : classifyStartupLogFailure(healthSpec, previewLogInspection.rawLogs);
     const diagnostics = diagnoseDeploymentFailure({
       spec: healthSpec,
-      stdout: "",
-      stderr: preview.error ?? `Preview verification failed for ${preview.url ?? spec.runtime.url}.`,
+      stdout: previewLogInspection.logsResult.stdout,
+      stderr: [preview.error ?? `Preview verification failed for ${preview.url ?? spec.runtime.url}.`, previewLogInspection.logsResult.stderr].filter(Boolean).join("\n"),
     });
     await writeDeploymentRepairRequest({
       projectRoot: input.projectRoot,
       spec: healthSpec,
-      failureKind: "preview_not_verified",
-      command: ["GET", preview.url ?? healthSpec.runtime.url],
+      failureKind,
+      command: failureKind === "preview_not_verified"
+        ? ["GET", preview.url ?? healthSpec.runtime.url]
+        : composeCommand(healthSpec, previewLogInspection.logsArgs),
       exitCode: preview.statusCode ?? 1,
-      stdout: "",
-      stderr: preview.error ?? `Preview verification failed for ${preview.url ?? spec.runtime.url}.`,
+      stdout: previewLogInspection.logsResult.stdout,
+      stderr: [preview.error ?? `Preview verification failed for ${preview.url ?? spec.runtime.url}.`, previewLogInspection.logsResult.stderr].filter(Boolean).join("\n"),
       diagnostics,
       previousAttempts: await nextRepairAttempt(input.projectRoot),
     });
@@ -978,6 +996,7 @@ function inferredRepairFailureOwner(request: {
   if (
     request.failureKind === "build_command_failed" ||
     request.failureKind === "start_command_failed" ||
+    request.failureKind === "application_startup_failed" ||
     request.failureKind === "http_probe_failed" ||
     request.failureKind === "preview_not_verified"
   ) {
@@ -1347,6 +1366,24 @@ function composeLogsArgs(spec: DeploymentSpec, tail: string): string[] {
     : ["logs", "--tail", tail];
 }
 
+async function inspectDeploymentStartupLogs(
+  projectRoot: string,
+  composePath: string,
+  spec: DeploymentSpec,
+  label: string,
+) {
+  const logsArgs = composeLogsArgs(spec, "120");
+  const logsResult = await dockerCompose(projectRoot, composePath, logsArgs, 30_000);
+  await appendCommandLog(projectRoot, label, logsResult);
+  const rawLogs = `${logsResult.stdout}${logsResult.stderr ? `\n${logsResult.stderr}` : ""}`;
+  return {
+    logsArgs,
+    logsResult,
+    rawLogs,
+    logValidation: validateStartupLogs(rawLogs),
+  };
+}
+
 async function resolveDeploymentContainer(
   projectRoot: string,
   composePath: string,
@@ -1464,7 +1501,14 @@ function classifyStartupLogFailure(
   ) {
     return "start_command_failed";
   }
+  if (isApplicationStartupFailure(combined)) {
+    return "application_startup_failed";
+  }
   return "container_start";
+}
+
+function isApplicationStartupFailure(logs: string): boolean {
+  return /application failed to start|beancreationexception|unsatisfieddependencyexception|applicationcontextexception|webserverexception|flywayexception|liquibaseexception|hibernateexception|schemamanagementexception|psqlexception|communications link failure|unable to obtain jdbc connection|prisma.*p20\d{2}|django\.db\.utils\.|improperlyconfigured|active(record|model)::|illuminate\\database|sqlstate\[/.test(logs);
 }
 
 function packageScriptNameFromCommand(command: string): string | null {

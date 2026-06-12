@@ -306,6 +306,7 @@ export type DeploymentFailureKind =
   | "runtime_contract_mismatch"
   | "build_command_failed"
   | "start_command_failed"
+  | "application_startup_failed"
   | "http_probe_failed"
   | "preview_not_verified"
   | "deploy_asset_invalid"
