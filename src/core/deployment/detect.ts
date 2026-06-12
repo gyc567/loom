@@ -1,7 +1,14 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { DependencyService, DependencyServiceKind, DetectedStack } from "./types";
+import type { DetectedStack } from "./types";
 import { pathExists } from "../state/fs";
+import {
+  dedupeDependencyServices,
+  dependencyServiceKindsFromLooseSignals,
+  detectedDependencyReason,
+  normalizeDependencyConnectionEnv,
+  serviceDefinition,
+} from "./dependency-signals";
 
 type PackageJson = {
   scripts?: Record<string, string>;
@@ -687,48 +694,13 @@ async function detectDependencyServices(
   projectRoot: string,
   depsOrSignals: Record<string, string> | string,
   scripts: Record<string, string> = {},
-): Promise<DependencyService[]> {
+): Promise<DetectedStack["services"]> {
   const signals = typeof depsOrSignals === "string"
     ? `${depsOrSignals}\n${await readEnvSignals(projectRoot)}`.toLowerCase()
     : `${Object.keys(depsOrSignals).join("\n")}\n${Object.values(scripts).join("\n")}\n${await readEnvSignals(projectRoot)}`.toLowerCase();
-  const services: DependencyService[] = [];
-
-  if (hasAny(signals, [
-    "postgres",
-    "postgresql",
-    "org.postgresql",
-    "jdbc:postgresql",
-    "npgsql",
-    "pdo_pgsql",
-    "pgsql",
-    "psycopg",
-    "asyncpg",
-    "prisma",
-    "drizzle-orm",
-    "gorm.io/driver/postgres",
-  ]) || hasTokenSignal(signals, "pg")) {
-    services.push(serviceDefinition("postgres", "Detected postgres/pg/prisma/drizzle signal."));
-  }
-  if (hasAny(signals, ["redis", "ioredis", "bullmq", "bull-board", "predis", "phpredis", "sidekiq", "spring-data-redis", "lettuce", "jedis", "stackexchange.redis"])) {
-    services.push(serviceDefinition("redis", "Detected redis/ioredis/queue signal."));
-  }
-  if (hasAny(signals, ["mysql", "mysql2", "mariadb", "jdbc:mysql", "jdbc:mariadb", "mysqlconnector", "pdo_mysql", "mysqli", "pymysql", "mysqlclient", "gorm.io/driver/mysql"])) {
-    services.push(serviceDefinition("mysql", "Detected mysql/mysql2/mariadb signal."));
-  }
-  if (hasAny(signals, ["mongodb", "mongoose", "pymongo", "motor", "mongodb.driver", "spring-boot-starter-data-mongodb", "spring-data-mongodb", "go.mongodb.org/mongo-driver"])) {
-    services.push(serviceDefinition("mongodb", "Detected mongodb/mongoose/pymongo signal."));
-  }
-  if (hasAny(signals, ["rabbitmq", "amqplib", "amqp", "pika", "rabbitmq.client", "spring-rabbit"])) {
-    services.push(serviceDefinition("rabbitmq", "Detected rabbitmq/amqp signal."));
-  }
-  if (hasAny(signals, ["elasticsearch", "@elastic/elasticsearch", "elastic.clients.elasticsearch", "org.elasticsearch", "opensearch"])) {
-    services.push(serviceDefinition("elasticsearch", "Detected elasticsearch/opensearch signal."));
-  }
-  if (hasAny(signals, ["minio", "s3_endpoint", "aws_s3_endpoint", "s3-compatible"])) {
-    services.push(serviceDefinition("minio", "Detected minio/s3-compatible storage signal."));
-  }
-
-  return normalizeConnectionEnv(dedupeServices(services));
+  const services = dependencyServiceKindsFromLooseSignals(signals)
+    .map((kind) => serviceDefinition(kind, detectedDependencyReason(kind)));
+  return normalizeDependencyConnectionEnv(dedupeDependencyServices(services));
 }
 
 async function readEnvSignals(projectRoot: string): Promise<string> {
@@ -743,181 +715,8 @@ async function readEnvSignals(projectRoot: string): Promise<string> {
   return values.join("\n");
 }
 
-export function serviceDefinition(kind: DependencyServiceKind, reason: string): DependencyService {
-  switch (kind) {
-    case "postgres":
-      return {
-        kind,
-        serviceName: "postgres",
-        image: "postgres:16-alpine",
-        port: 5432,
-        env: {
-          POSTGRES_USER: "loom",
-          POSTGRES_PASSWORD: "loom",
-          POSTGRES_DB: "loom",
-        },
-        connectionEnv: {
-          DATABASE_URL: "postgresql://loom:loom@postgres:5432/loom",
-        },
-        volumeName: "postgres-data",
-        volumeTarget: "/var/lib/postgresql/data",
-        reason,
-      };
-    case "redis":
-      return {
-        kind,
-        serviceName: "redis",
-        image: "redis:7-alpine",
-        port: 6379,
-        env: {},
-        connectionEnv: {
-          REDIS_URL: "redis://redis:6379",
-        },
-        volumeName: "redis-data",
-        volumeTarget: "/data",
-        reason,
-      };
-    case "mysql":
-      return {
-        kind,
-        serviceName: "mysql",
-        image: "mysql:8",
-        port: 3306,
-        env: {
-          MYSQL_ROOT_PASSWORD: "loom",
-          MYSQL_DATABASE: "loom",
-          MYSQL_USER: "loom",
-          MYSQL_PASSWORD: "loom",
-        },
-        connectionEnv: {
-          DATABASE_URL: "mysql://loom:loom@mysql:3306/loom",
-        },
-        volumeName: "mysql-data",
-        volumeTarget: "/var/lib/mysql",
-        reason,
-      };
-    case "mongodb":
-      return {
-        kind,
-        serviceName: "mongodb",
-        image: "mongo:7",
-        port: 27017,
-        env: {
-          MONGO_INITDB_ROOT_USERNAME: "loom",
-          MONGO_INITDB_ROOT_PASSWORD: "loom",
-        },
-        connectionEnv: {
-          MONGODB_URL: "mongodb://loom:loom@mongodb:27017/loom?authSource=admin",
-        },
-        volumeName: "mongodb-data",
-        volumeTarget: "/data/db",
-        reason,
-      };
-    case "rabbitmq":
-      return {
-        kind,
-        serviceName: "rabbitmq",
-        image: "rabbitmq:3-alpine",
-        port: 5672,
-        env: {
-          RABBITMQ_DEFAULT_USER: "loom",
-          RABBITMQ_DEFAULT_PASS: "loom",
-        },
-        connectionEnv: {
-          RABBITMQ_URL: "amqp://loom:loom@rabbitmq:5672",
-        },
-        volumeName: "rabbitmq-data",
-        volumeTarget: "/var/lib/rabbitmq",
-        reason,
-      };
-    case "elasticsearch":
-      return {
-        kind,
-        serviceName: "elasticsearch",
-        image: "docker.elastic.co/elasticsearch/elasticsearch:8.15.3",
-        port: 9200,
-        env: {
-          discovery_type: "single-node",
-          xpack_security_enabled: "false",
-          ES_JAVA_OPTS: "-Xms512m -Xmx512m",
-        },
-        connectionEnv: {
-          ELASTICSEARCH_URL: "http://elasticsearch:9200",
-        },
-        volumeName: "elasticsearch-data",
-        volumeTarget: "/usr/share/elasticsearch/data",
-        reason,
-      };
-    case "minio":
-      return {
-        kind,
-        serviceName: "minio",
-        image: "minio/minio:RELEASE.2025-04-22T22-12-26Z",
-        port: 9000,
-        env: {
-          MINIO_ROOT_USER: "loom",
-          MINIO_ROOT_PASSWORD: "loom-password",
-        },
-        connectionEnv: {
-          S3_ENDPOINT: "http://minio:9000",
-          S3_ACCESS_KEY_ID: "loom",
-          S3_SECRET_ACCESS_KEY: "loom-password",
-          S3_BUCKET: "loom",
-        },
-        volumeName: "minio-data",
-        volumeTarget: "/data",
-        reason,
-      };
-  }
-}
-
 function hasAny(value: string, needles: string[]): boolean {
   return needles.some((needle) => value.includes(needle));
-}
-
-function hasTokenSignal(value: string, token: string): boolean {
-  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|[^a-z0-9_@/-])${escaped}(?=$|[^a-z0-9_@/-])`, "i").test(value);
-}
-
-function dedupeServices(services: DependencyService[]): DependencyService[] {
-  const seen = new Set<DependencyServiceKind>();
-  return services.filter((service) => {
-    if (seen.has(service.kind)) {
-      return false;
-    }
-    seen.add(service.kind);
-    return true;
-  });
-}
-
-function normalizeConnectionEnv(services: DependencyService[]): DependencyService[] {
-  const sqlServices = services.filter((service) => service.kind === "postgres" || service.kind === "mysql");
-  if (sqlServices.length <= 1) {
-    return services;
-  }
-
-  return services.map((service) => {
-    if (service.kind === "postgres") {
-      return {
-        ...service,
-        connectionEnv: {
-          POSTGRES_URL: "postgresql://loom:loom@postgres:5432/loom",
-        },
-        reason: `${service.reason} Multiple SQL services detected, so DATABASE_URL was not assigned automatically.`,
-      };
-    }
-    if (service.kind === "mysql") {
-      return {
-        ...service,
-        connectionEnv: {
-          MYSQL_URL: "mysql://loom:loom@mysql:3306/loom",
-        },
-        reason: `${service.reason} Multiple SQL services detected, so DATABASE_URL was not assigned automatically.`,
-      };
-    }
-    return service;
-  });
 }
 
 function detectPythonFramework(signals: string): string {

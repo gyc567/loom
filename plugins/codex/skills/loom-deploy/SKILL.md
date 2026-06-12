@@ -101,6 +101,15 @@ If diagnostics point to migrations/bootstrap, run `loom deploy bootstrap --proje
 
 loom v1 uses Dockerfile/Compose only. It does not switch to Railpack, Buildpacks, or other external builders; if deployment cannot be repaired with Dockerfile/Compose, explain the blocker clearly.
 
+## Structured Deploy Blockers
+
+Some deploy prepare/run failures are source-of-truth blockers, not repair loops.
+
+- `DEPLOY_SOURCE_INSUFFICIENT`: the CLI could not derive a complete deploy source model from TechnicalBaseline, code evidence, and existing deployment assets. Read `error.details.evidenceRef`, `missingFacts`, `ambiguous`, and `nextAction`; report the missing facts or ask for the requested decision. Do not rerun blindly, invent dependency services, or generate Dockerfile/Compose assets from memory.
+- `DEPLOY_CONFLICT`: TechnicalBaseline expectations conflict with code evidence or existing deploy assets. Read `error.details.evidenceRef` and `conflicts`; ask the user or follow the returned `nextAction`. Do not silently switch stacks, change dependency services, or overwrite generated assets to make the conflict disappear.
+
+TechnicalBaseline is expectation context. The CLI's deploy code evidence, generated spec, and blocker envelope decide deployment behavior. Do not override a structured blocker with skill text, prior chat memory, or manual Docker commands.
+
 ## Knowledge Layout
 
 Keep `SKILL.md` as the workflow router. Put deploy knowledge in focused reference files so new stacks can be added without mixing unrelated runtime assumptions.

@@ -67,6 +67,15 @@ If `deploy run` returns `completed: false`, inspect `data.repair` and the return
 - If `nextAction` is `fix-docker`, ask the user to start Docker, fix permissions, or pull the blocked base image/registry dependency.
 - If `nextAction` is `request-user-approval`, explain protected files and ask before editing them.
 
+## Structured Deploy Blockers
+
+Some deploy prepare/run failures are source-of-truth blockers, not repair loops.
+
+- `DEPLOY_SOURCE_INSUFFICIENT`: the CLI could not derive a complete deploy source model from TechnicalBaseline, code evidence, and existing deployment assets. Read `error.details.evidenceRef`, `missingFacts`, `ambiguous`, and `nextAction`; report the missing facts or ask for the requested decision. Do not rerun blindly, invent dependency services, or generate Dockerfile/Compose assets from memory.
+- `DEPLOY_CONFLICT`: TechnicalBaseline expectations conflict with code evidence or existing deploy assets. Read `error.details.evidenceRef` and `conflicts`; ask the user or follow the returned `nextAction`. Do not silently switch stacks, change dependency services, or overwrite generated assets to make the conflict disappear.
+
+TechnicalBaseline is expectation context. The CLI's deploy code evidence, generated spec, and blocker envelope decide deployment behavior. Do not override a structured blocker with command text, prior chat memory, or manual Docker commands.
+
 ## Knowledge Layout
 
 Keep this command file as the workflow router. Deploy provider, stack, environment, bootstrap, and repair knowledge is installed with the opencode adapter under `$HOME/.config/opencode/loom-deploy/references/` unless `OPENCODE_CONFIG_HOME` points to a different config root. These references are part of the deploy adapter package, not slash commands. Load only the focused reference needed for the returned deploy failure, selected stack, or repair action.

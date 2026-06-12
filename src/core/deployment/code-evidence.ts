@@ -7,7 +7,19 @@ import { technicalBaselineSchema, type TechnicalBaseline } from "../contracts";
 import { getActiveLocator, loadProjectStatus } from "../state/delivery";
 import { ensureDir, pathExists, readJsonFile, writeJsonAtomic } from "../state/fs";
 import { technicalBaselinePath, toProjectRelative } from "../state/paths";
-import { serviceDefinition } from "./detect";
+import {
+  DATABASE_SERVICE_KINDS,
+  dependencyServiceEvidenceMatches,
+  hasDatabaseRuntimeSignal,
+  hasSqliteSignal,
+  isDependencyManifestPath,
+  persistenceKindFromSelection,
+  persistenceServiceKindFromSelection,
+  prismaProvider,
+  databaseRuntimeSignalLabel,
+  serviceDefinition,
+  withSpringDatasourceConnectionEnv,
+} from "./dependency-signals";
 import { getDeploymentPaths } from "./paths";
 import type {
   DependencyService,
@@ -131,8 +143,6 @@ const SOURCE_EXTENSIONS = new Set([
   ".properties",
   ".toml",
 ]);
-
-const DATABASE_SERVICE_KINDS = new Set<DependencyServiceKind>(["postgres", "mysql", "mongodb"]);
 
 export async function loadDeploymentTechnicalBaseline(projectRoot: string): Promise<BaselineInfo | null> {
   const deliveryIds = new Set<string>();
@@ -472,26 +482,12 @@ function collectServiceCandidates(signals: FileSignal[]): ServiceCandidate[] {
       if (provider === "mongodb") add("mongodb", "Prisma datasource provider is mongodb.", "explicit_provider");
     }
 
-    if (/jdbc:postgresql|postgresql:\/\/|postgres:\/\/|adapter:\s*postgresql|org\.postgresql|gorm\.io\/driver\/postgres|psycopg|asyncpg|npgsql|pdo_pgsql|pgsql/.test(lower) || hasPackageDependency(signal, ["pg"])) {
-      add("postgres", "PostgreSQL driver or connection signal found.", dbStrength(signal));
-    }
-    if (/jdbc:mysql|jdbc:mariadb|mysql:\/\/|mariadb:\/\/|adapter:\s*mysql2?|mysql-connector|mysql2|pymysql|mysqlclient|pdo_mysql|mysqli|gorm\.io\/driver\/mysql/.test(lower)) {
-      add("mysql", "MySQL/MariaDB driver or connection signal found.", dbStrength(signal));
-    }
-    if (/redis:\/\/|redis_url|spring\.data\.redis|spring_redis|ioredis|bullmq|lettuce|jedis|stackexchange\.redis|predis|phpredis|sidekiq|gem\s+["']redis["']/.test(lower) || hasPackageDependency(signal, ["redis"])) {
-      add("redis", "Redis driver, queue, or connection signal found.", serviceStrength(signal));
-    }
-    if (/mongodb:\/\/|mongodb|mongoose|pymongo|motor|mongo-driver|spring-boot-starter-data-mongodb/.test(lower)) {
-      add("mongodb", "MongoDB driver or connection signal found.", serviceStrength(signal));
-    }
-    if (/rabbitmq|amqp:\/\/|rabbitmq_url|spring_rabbit|amqplib|pika/.test(lower)) {
-      add("rabbitmq", "RabbitMQ/AMQP driver or connection signal found.", serviceStrength(signal));
-    }
-    if (/elasticsearch|opensearch|elastic\.clients|@elastic\/elasticsearch/.test(lower)) {
-      add("elasticsearch", "Elasticsearch/OpenSearch driver or endpoint signal found.", serviceStrength(signal));
-    }
-    if (/minio|s3_endpoint|aws_s3_endpoint|s3-compatible/.test(lower)) {
-      add("minio", "MinIO/S3-compatible endpoint signal found.", serviceStrength(signal));
+    for (const match of dependencyServiceEvidenceMatches({
+      path: signal.file.relativePath,
+      text,
+      lower,
+    })) {
+      add(match.kind, match.reason, match.database ? dbStrength(signal) : serviceStrength(signal));
     }
   }
   return candidates;
@@ -500,13 +496,14 @@ function collectServiceCandidates(signals: FileSignal[]): ServiceCandidate[] {
 function collectEmbeddedStores(signals: FileSignal[]): Array<DeploymentEvidenceValue<"sqlite" | "file">> {
   const stores: Array<DeploymentEvidenceValue<"sqlite" | "file">> = [];
   for (const signal of signals) {
-    const lower = signal.lower;
-    if (signal.file.relativePath.endsWith("schema.prisma") && prismaProvider(signal.text) === "sqlite") {
-      stores.push(valueEvidence("sqlite", "high", [evidence(signal.file.relativePath, "Prisma datasource provider is sqlite.")]));
-      continue;
-    }
-    if (/jdbc:sqlite|sqlite:\/\/|sqlite3|better-sqlite3|microsoft\.data\.sqlite/.test(lower)) {
-      stores.push(valueEvidence("sqlite", "high", [evidence(signal.file.relativePath, "SQLite driver or connection signal found.")]));
+    if (hasSqliteSignal(signal.file.relativePath, signal.text, signal.lower)) {
+      stores.push(valueEvidence(
+        "sqlite",
+        "high",
+        [evidence(signal.file.relativePath, signal.file.relativePath.endsWith("schema.prisma") && prismaProvider(signal.text) === "sqlite"
+          ? "Prisma datasource provider is sqlite."
+          : "SQLite driver or connection signal found.")],
+      ));
     }
   }
   return dedupeEvidenceValues(stores);
@@ -516,23 +513,12 @@ function collectDatabaseRuntimeEvidence(signals: FileSignal[]): DeploymentEviden
   const refs: DeploymentEvidenceRef[] = [];
   for (const signal of signals) {
     const lower = signal.lower;
-    if (/database_url|database_uri|db_url|spring[_\.]datasource|datasource\.url|sqlalchemy_database_uri|connectionstrings|jdbc:/.test(lower)) {
+    if (hasDatabaseRuntimeSignal(lower)) {
       const matched = databaseRuntimeSignalLabel(lower);
       refs.push(evidence(signal.file.relativePath, `Database runtime configuration or environment reference found${matched ? `: ${matched}` : ""}.`));
     }
   }
   return dedupeRefs(refs);
-}
-
-function databaseRuntimeSignalLabel(lower: string): string | null {
-  if (/spring[_\.]datasource/.test(lower)) return "SPRING_DATASOURCE";
-  if (/database_url/.test(lower)) return "DATABASE_URL";
-  if (/database_uri/.test(lower)) return "DATABASE_URI";
-  if (/db_url/.test(lower)) return "DB_URL";
-  if (/sqlalchemy_database_uri/.test(lower)) return "SQLALCHEMY_DATABASE_URI";
-  if (/connectionstrings/.test(lower)) return "ConnectionStrings";
-  if (/jdbc:/.test(lower)) return "JDBC";
-  return null;
 }
 
 function resolveDependencyServices(input: {
@@ -575,10 +561,10 @@ function resolveDependencyServices(input: {
         ...candidates.flatMap((candidate) => candidate.evidence),
         ...(DATABASE_SERVICE_KINDS.has(kind) ? input.databaseRuntimeEvidence : []),
       ]);
-      const service = serviceWithRuntimeConnectionEnv(
+      const service = withSpringDatasourceConnectionEnv(
         serviceDefinition(kind, refs.map((ref) => `${ref.path}: ${ref.reason}`).join(" ")),
         input.stack,
-        refs,
+        refs.map((ref) => `${ref.path} ${ref.reason}`).join("\n"),
       );
       return valueEvidence(service, serviceConfidence(candidates), refs);
     })
@@ -662,42 +648,6 @@ function warningsFor(
   return warnings;
 }
 
-function serviceWithRuntimeConnectionEnv(
-  service: DependencyService,
-  stack: DetectedStack,
-  refs: DeploymentEvidenceRef[],
-): DependencyService {
-  const combined = refs.map((ref) => `${ref.path} ${ref.reason}`).join("\n").toLowerCase();
-  const springLike = /spring[_\.]datasource/.test(combined) ||
-    (stack.kind === "java" && (stack.framework === "spring-boot" || /application\.ya?ml|application\.properties/.test(combined)));
-  if (!springLike) {
-    return service;
-  }
-  if (service.kind === "postgres") {
-    return {
-      ...service,
-      connectionEnv: {
-        ...service.connectionEnv,
-        SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres:5432/loom",
-        SPRING_DATASOURCE_USERNAME: "loom",
-        SPRING_DATASOURCE_PASSWORD: "loom",
-      },
-    };
-  }
-  if (service.kind === "mysql") {
-    return {
-      ...service,
-      connectionEnv: {
-        ...service.connectionEnv,
-        SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/loom",
-        SPRING_DATASOURCE_USERNAME: "loom",
-        SPRING_DATASOURCE_PASSWORD: "loom",
-      },
-    };
-  }
-  return service;
-}
-
 function serviceConfidence(candidates: ServiceCandidate[]): DeploymentEvidenceConfidence {
   if (candidates.some((candidate) => candidate.strength === "explicit_provider" || candidate.strength === "runtime_config" || candidate.strength === "env")) {
     return "high";
@@ -715,25 +665,15 @@ function serviceStrength(signal: FileSignal): ServiceCandidate["strength"] {
 
 function isPackageOnlySqlDriver(candidate: ServiceCandidate): boolean {
   return candidate.strength === "driver" &&
-    candidate.evidence.every((ref) => /package\.json$|pom\.xml$|build\.gradle|requirements\.txt$|pyproject\.toml$|go\.mod$|\.csproj$|composer\.json$|Gemfile$/.test(ref.path));
+    candidate.evidence.every((ref) => isDependencyManifestPath(ref.path));
 }
 
 function baselinePersistenceKind(track: DeploymentCodeEvidenceTrack | null): DependencyServiceKind | "sqlite" | "file" | null {
-  const value = track?.normalizedSelection ?? "";
-  if ((track && /not_needed|not_applicable/i.test(track.status ?? "")) || /no persistence|不需要|none|not needed/.test(value)) {
-    return null;
-  }
-  if (/postgres|postgresql|pgsql/.test(value)) return "postgres";
-  if (/mysql|mariadb/.test(value)) return "mysql";
-  if (/mongodb|mongo/.test(value)) return "mongodb";
-  if (/sqlite/.test(value)) return "sqlite";
-  if (/file|json/.test(value)) return "file";
-  return null;
+  return track ? persistenceKindFromSelection(track) : null;
 }
 
 function baselinePersistenceServiceKind(track: DeploymentCodeEvidenceTrack | null): DependencyServiceKind | null {
-  const kind = baselinePersistenceKind(track);
-  return kind === "postgres" || kind === "mysql" || kind === "mongodb" ? kind : null;
+  return track ? persistenceServiceKindFromSelection(track) : null;
 }
 
 function signalsForRuntime(stack: DetectedStack, signals: FileSignal[]): DeploymentEvidenceRef[] {
@@ -750,32 +690,6 @@ function signalsForRuntime(stack: DetectedStack, signals: FileSignal[]): Deploym
     .slice(0, 5)
     .map((signal) => evidence(signal.file.relativePath, "Runtime declaration signal."));
   return refs.length > 0 ? refs : [evidence("detectedStack", "Derived from current project runtime detection.")];
-}
-
-function hasPackageDependency(signal: FileSignal, names: string[]): boolean {
-  if (!signal.file.relativePath.endsWith("package.json")) {
-    return false;
-  }
-  try {
-    const pkg = JSON.parse(signal.text) as {
-      dependencies?: Record<string, unknown>;
-      devDependencies?: Record<string, unknown>;
-      optionalDependencies?: Record<string, unknown>;
-    };
-    const deps = {
-      ...(pkg.dependencies ?? {}),
-      ...(pkg.devDependencies ?? {}),
-      ...(pkg.optionalDependencies ?? {}),
-    };
-    return names.some((name) => Object.prototype.hasOwnProperty.call(deps, name));
-  } catch {
-    return false;
-  }
-}
-
-function prismaProvider(text: string): string | null {
-  const match = text.match(/provider\s*=\s*"([^"]+)"/i);
-  return match?.[1]?.toLowerCase() ?? null;
 }
 
 function evidence(pathValue: string, reason: string): DeploymentEvidenceRef {
