@@ -81,6 +81,115 @@ export type DependencyService = {
   reason: string;
 };
 
+export type DeploymentEvidenceRef = {
+  path: string;
+  reason: string;
+};
+
+export type DeploymentEvidenceConfidence = "low" | "medium" | "high";
+
+export type DeploymentEvidenceValue<T> = {
+  value: T;
+  confidence: DeploymentEvidenceConfidence;
+  evidence: DeploymentEvidenceRef[];
+};
+
+export type DeploymentCodeEvidenceTrack = {
+  status: string | null;
+  selection: string | null;
+  normalizedSelection: string | null;
+  source: string | null;
+  rationale: string | null;
+};
+
+export type DeploymentCodeEvidence = {
+  schemaVersion: 1;
+  evidenceId: string;
+  generatedAt: string;
+  fingerprint: string;
+  projectRoot: string;
+  technicalBaselineRef: string | null;
+  baselineExpectation: {
+    web: DeploymentCodeEvidenceTrack | null;
+    app: DeploymentCodeEvidenceTrack | null;
+    backend: DeploymentCodeEvidenceTrack | null;
+    persistence: DeploymentCodeEvidenceTrack | null;
+    dataAccess: DeploymentCodeEvidenceTrack | null;
+    externalServices: DeploymentCodeEvidenceTrack | null;
+  };
+  runtimeFacts: {
+    web: DeploymentEvidenceValue<string> | null;
+    backend: DeploymentEvidenceValue<string> | null;
+    fullstack: DeploymentEvidenceValue<string> | null;
+    workers: DeploymentEvidenceValue<string>[];
+  };
+  buildStartFacts: {
+    buildCommand: DeploymentEvidenceValue<string> | null;
+    startCommand: DeploymentEvidenceValue<string> | null;
+    port: DeploymentEvidenceValue<number> | null;
+    healthPath: DeploymentEvidenceValue<string> | null;
+    previewPath: DeploymentEvidenceValue<string> | null;
+    frontendOutputDir: DeploymentEvidenceValue<string> | null;
+    staticServing: DeploymentEvidenceValue<boolean> | null;
+  };
+  dependencyFacts: {
+    services: Array<DeploymentEvidenceValue<DependencyService>>;
+    embeddedStores: Array<DeploymentEvidenceValue<"sqlite" | "file">>;
+    ambiguous: Array<{
+      kind: "database" | "cache" | "queue" | "object_storage" | "search";
+      reason: string;
+      evidence: DeploymentEvidenceRef[];
+    }>;
+  };
+  environmentFacts: {
+    required: DeploymentEvidenceRef[];
+    provided: DeploymentEvidenceRef[];
+    generated: Record<string, string>;
+    missing: DeploymentEvidenceRef[];
+  };
+  existingDeployAssets: DeploymentEvidenceRef[];
+  conflicts: DeployConflict[];
+  missingFacts: DeployMissingFact[];
+  warnings: string[];
+};
+
+export type DeployConflict = {
+  conflictId: string;
+  type: "technical_baseline_code_conflict" | "deployment_asset_conflict" | "runtime_fact_conflict";
+  message: string;
+  left: DeploymentEvidenceRef;
+  right: DeploymentEvidenceRef;
+  resolution: "ask_user" | "execution_repair";
+};
+
+export type DeployMissingFact = {
+  factId: string;
+  type: "database_kind" | "build_command" | "start_command" | "probe" | "external_config";
+  message: string;
+  evidence: DeploymentEvidenceRef[];
+  resolution: "ask_user" | "execution_repair";
+};
+
+export type DeploymentCodeEvidenceSummary = {
+  ref: string;
+  fingerprint: string;
+  technicalBaselineRef: string | null;
+  runtimeFacts: {
+    web: string | null;
+    backend: string | null;
+    fullstack: string | null;
+  };
+  dependencyServices: Array<{
+    kind: DependencyServiceKind;
+    serviceName: string;
+    reason: string;
+  }>;
+  embeddedStores: string[];
+  warningCount: number;
+  conflictCount: number;
+  missingFactCount: number;
+};
+
 export type DetectedStack = {
   kind: "node" | "python" | "go" | "java" | "dotnet" | "php" | "ruby" | "static" | "unknown";
   packageManager:
@@ -246,6 +355,7 @@ export type DeploymentSpec = {
   bootstrap: DeploymentBootstrapDiagnostics;
   compose: DeploymentComposeInfo;
   runtimeContract: DeploymentRuntimeContract;
+  codeEvidence?: DeploymentCodeEvidenceSummary;
   files: {
     dockerfilePath: string | null;
     composePath: string;

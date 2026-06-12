@@ -9,6 +9,7 @@ import type {
   DeploymentWorkspace,
   DetectedStack,
   DeploymentSpec,
+  DeploymentCodeEvidenceSummary,
 } from "./types";
 import { toProjectRelative } from "../state/paths";
 import { generatedDependencyEnvironment, generatedRuntimeEnvironment } from "./env";
@@ -32,6 +33,7 @@ export function createDeploymentSpec(input: {
   environment: DeploymentEnvDiagnostics;
   bootstrap: DeploymentBootstrapDiagnostics;
   compose?: DeploymentComposeInfo;
+  codeEvidence?: DeploymentCodeEvidenceSummary;
   dockerfilePath: string;
   composePath: string;
   dockerignorePath: string;
@@ -63,6 +65,7 @@ export function createDeploymentSpec(input: {
     environment: input.environment,
     bootstrap: input.bootstrap,
     compose: input.compose ?? generatedComposeInfo(serviceName, input.detectedStack.port),
+    ...(input.codeEvidence ? { codeEvidence: input.codeEvidence } : {}),
     runtimeContract: {
       source: "heuristic",
       ref: null,

@@ -224,6 +224,34 @@ const deploymentRuntimeContractSchema = z.object({
   dependencyServices: z.array(dependencyServiceSchema).default([]),
 }).optional();
 
+const deploymentCodeEvidenceSummarySchema = z.object({
+  ref: z.string().min(1),
+  fingerprint: z.string().min(1),
+  technicalBaselineRef: z.string().min(1).nullable(),
+  runtimeFacts: z.object({
+    web: z.string().nullable(),
+    backend: z.string().nullable(),
+    fullstack: z.string().nullable(),
+  }),
+  dependencyServices: z.array(z.object({
+    kind: z.enum([
+      "postgres",
+      "redis",
+      "mysql",
+      "mongodb",
+      "rabbitmq",
+      "elasticsearch",
+      "minio",
+    ]),
+    serviceName: z.string().min(1),
+    reason: z.string().min(1),
+  })).default([]),
+  embeddedStores: z.array(z.string()).default([]),
+  warningCount: z.number().int().nonnegative(),
+  conflictCount: z.number().int().nonnegative(),
+  missingFactCount: z.number().int().nonnegative(),
+}).optional();
+
 const deploymentSpecSchema = z.object({
   schemaVersion: z.literal(1),
   provider: z.enum(["compose-existing", "dockerfile-existing", "dockerfile-template"]),
@@ -259,6 +287,7 @@ const deploymentSpecSchema = z.object({
   bootstrap: deploymentBootstrapDiagnosticsSchema,
   compose: deploymentComposeInfoSchema,
   runtimeContract: deploymentRuntimeContractSchema,
+  codeEvidence: deploymentCodeEvidenceSummarySchema,
   files: z.object({
     dockerfilePath: z.string().min(1).nullable(),
     composePath: z.string().min(1),

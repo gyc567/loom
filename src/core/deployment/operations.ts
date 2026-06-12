@@ -1,11 +1,17 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { deployNotRunning, deployValidationFailed, dockerUnavailable, LoomError } from "../errors";
+import { deployConflict, deployNotRunning, deploySourceInsufficient, deployValidationFailed, dockerUnavailable, LoomError } from "../errors";
 import { ensureDir, pathExists, readJsonFile } from "../state/fs";
 import { architectureContractPath, architectureLatestPath, toProjectRelative } from "../state/paths";
 import { getActiveLocator, loadDeliveryIndex } from "../state/delivery";
 import { architectureArtifactContractSchema } from "../contracts";
 import { analyzeDeploymentBootstrap } from "./bootstrap";
+import {
+  applyDeploymentCodeEvidenceToStack,
+  buildDeploymentCodeEvidence,
+  loadDeploymentTechnicalBaseline,
+  writeDeploymentCodeEvidence,
+} from "./code-evidence";
 import { DEFAULT_DEPLOY_BUILD_TIMEOUT_MS } from "./constants";
 import { diagnoseDeploymentFailure } from "./diagnostics";
 import {
@@ -64,6 +70,7 @@ import type {
   DeploymentRepairRoute,
   DeploymentSpec,
   DeploymentState,
+  DeploymentCodeEvidence,
   DeployProvider,
 } from "./types";
 
@@ -76,6 +83,7 @@ export type DeployPrepareResult = {
   providerPolicy: DeploymentSpec["providerPolicy"];
   providerCandidates: DeploymentSpec["providerCandidates"];
   workspace: DeploymentSpec["workspace"];
+  codeEvidence: DeploymentSpec["codeEvidence"] | null;
   environment: DeploymentSpec["environment"];
   bootstrap: DeploymentSpec["bootstrap"];
   compose: DeploymentSpec["compose"];
@@ -174,6 +182,7 @@ export type DeployInspectResult = {
   providerPolicy: DeploymentSpec["providerPolicy"] | null;
   providerCandidates: DeploymentSpec["providerCandidates"];
   workspace: DeploymentSpec["workspace"] | null;
+  codeEvidence: DeploymentSpec["codeEvidence"] | null;
   detectedStack: DeploymentSpec["detectedStack"] | null;
   files: DeploymentSpec["files"] | null;
   compose: DeploymentSpec["compose"] | null;
@@ -229,6 +238,7 @@ export async function deployPrepare(input: {
   await ensureDir(paths.specsDir);
   await ensureDir(paths.stateDir);
   await ensureDir(paths.logsDir);
+  await ensureDir(paths.evidenceDir);
   await ensureDir(paths.generatedDir);
 
   const workspace = await resolveDeploymentWorkspaceForApp(input.projectRoot, input.appPath ?? null);
@@ -249,7 +259,16 @@ export async function deployPrepare(input: {
   };
   const runtimeContract = await loadDeploymentRuntimeContract(input.projectRoot, stackForContext);
   const contractStack = applyRuntimeContractToStack(stackForContext, runtimeContract);
-  const hostPort = await findAvailablePort(contractStack.port);
+  const technicalBaseline = await loadDeploymentTechnicalBaseline(input.projectRoot);
+  const rawCodeEvidence = await buildDeploymentCodeEvidence({
+    projectRoot: input.projectRoot,
+    stack: contractStack,
+    technicalBaseline,
+  });
+  const codeEvidence = await writeDeploymentCodeEvidence(input.projectRoot, rawCodeEvidence);
+  assertDeploymentCodeEvidenceReady(input.projectRoot, rawCodeEvidence, codeEvidence.ref);
+  const evidenceStack = applyDeploymentCodeEvidenceToStack(contractStack, rawCodeEvidence);
+  const hostPort = await findAvailablePort(evidenceStack.port);
   const workspaceMetadata = {
     ...workspace.workspace,
     buildContextPath: toProjectRelative(input.projectRoot, generatedBuildContextRoot) || ".",
@@ -257,16 +276,16 @@ export async function deployPrepare(input: {
   const environment = await analyzeDeploymentEnvironment({
     projectRoot: input.projectRoot,
     deploymentRoot,
-    stack: contractStack,
+    stack: evidenceStack,
     generatedEnvironment: {
-      ...generatedRuntimeEnvironment(contractStack),
-      ...generatedDependencyEnvironment(contractStack),
+      ...generatedRuntimeEnvironment(evidenceStack),
+      ...generatedDependencyEnvironment(evidenceStack),
     },
     contractEnvironment: runtimeContract.environment,
   });
   const bootstrap = await analyzeDeploymentBootstrap({
     deploymentRoot,
-    stack: contractStack,
+    stack: evidenceStack,
   });
 
   if (strategy.provider === "compose-existing" && existing.composePath) {
@@ -277,8 +296,8 @@ export async function deployPrepare(input: {
       ...(existing.dockerfilePath ? [toProjectRelative(input.projectRoot, existing.dockerfilePath)] : []),
     ];
     const composeStack = composePort
-      ? { ...contractStack, port: composePort.containerPort }
-      : contractStack;
+      ? { ...evidenceStack, port: composePort.containerPort }
+      : evidenceStack;
     const spec = applyHealthcheckInput(createDeploymentSpec({
       projectRoot: input.projectRoot,
       deploymentRoot,
@@ -295,6 +314,7 @@ export async function deployPrepare(input: {
       environment,
       bootstrap,
       compose: composeInfo,
+      codeEvidence,
       dockerfilePath: existing.dockerfilePath ?? paths.dockerfileFile,
       composePath: existing.composePath,
       dockerignorePath: paths.dockerignoreFile,
@@ -328,9 +348,10 @@ export async function deployPrepare(input: {
       providerReason: strategy.reason,
       providerPolicy: strategy.policy,
       providerCandidates: strategy.candidates,
-      detectedStack: contractStack,
+      detectedStack: evidenceStack,
       environment,
       bootstrap,
+      codeEvidence,
       dockerfilePath: existing.dockerfilePath,
       composePath: paths.composeFile,
       dockerignorePath: paths.dockerignoreFile,
@@ -356,9 +377,10 @@ export async function deployPrepare(input: {
     providerReason: strategy.reason,
     providerPolicy: strategy.policy,
     providerCandidates: strategy.candidates,
-    detectedStack: contractStack,
+    detectedStack: evidenceStack,
     environment,
     bootstrap,
+    codeEvidence,
     dockerfilePath: paths.dockerfileFile,
     composePath: paths.composeFile,
     dockerignorePath: paths.dockerignoreFile,
@@ -922,32 +944,13 @@ export async function deployDown(input: { projectRoot: string }): Promise<Deploy
 export async function deployRepair(input: { projectRoot: string }): Promise<DeployRepairResult> {
   const request = await readDeploymentRepairRequest(input.projectRoot);
   if (!request) {
-    return {
-      hasRepairRequest: false,
-      repairId: null,
-      failureKind: null,
-      provider: null,
-      command: [],
-      failureOwner: null,
-      repairRoute: null,
-      failureRef: null,
-      fullLogRef: null,
-      errorWindow: null,
-      providerCandidates: [],
-      environment: null,
-      bootstrap: null,
-      diagnostics: null,
-      suggestedActions: [],
-      editableFiles: [],
-      protectedFiles: [],
-      stdoutTail: [],
-      stderrTail: [],
-      instruction: null,
-      repairInstruction: undefined,
-      maxAttempts: 0,
-      attempts: 0,
-      nextAction: "none",
-    };
+    return emptyDeployRepairResult();
+  }
+
+  const currentStatus = await safeDeployStatus(input.projectRoot);
+  if (currentStatus?.running && (currentStatus.health?.status === "healthy" || currentStatus.health?.status === "disabled")) {
+    await clearDeploymentFailureArtifacts(input.projectRoot);
+    return emptyDeployRepairResult();
   }
 
   const failureOwner = request.failureOwner ?? inferredRepairFailureOwner(request);
@@ -980,6 +983,35 @@ export async function deployRepair(input: { projectRoot: string }): Promise<Depl
   return {
     ...result,
     repairInstruction: deployRepairInstruction(result, "deploy repair"),
+  };
+}
+
+function emptyDeployRepairResult(): DeployRepairResult {
+  return {
+    hasRepairRequest: false,
+    repairId: null,
+    failureKind: null,
+    provider: null,
+    command: [],
+    failureOwner: null,
+    repairRoute: null,
+    failureRef: null,
+    fullLogRef: null,
+    errorWindow: null,
+    providerCandidates: [],
+    environment: null,
+    bootstrap: null,
+    diagnostics: null,
+    suggestedActions: [],
+    editableFiles: [],
+    protectedFiles: [],
+    stdoutTail: [],
+    stderrTail: [],
+    instruction: null,
+    repairInstruction: undefined,
+    maxAttempts: 0,
+    attempts: 0,
+    nextAction: "none",
   };
 }
 
@@ -1051,6 +1083,7 @@ export async function deployInspect(input: { projectRoot: string; refresh?: bool
     providerPolicy: spec?.providerPolicy ?? null,
     providerCandidates: spec?.providerCandidates ?? [],
     workspace: spec?.workspace ?? null,
+    codeEvidence: spec?.codeEvidence ?? null,
     detectedStack: spec?.detectedStack ?? null,
     files: spec?.files ?? null,
     compose: spec?.compose ?? null,
@@ -1251,8 +1284,16 @@ async function preparedRuntimeContractDiffers(projectRoot: string, currentSpec?:
     };
     const latest = await loadDeploymentRuntimeContract(projectRoot, latestStackForContext);
     const latestDeploymentStack = applyRuntimeContractToStack(latestStackForContext, latest);
+    const technicalBaseline = await loadDeploymentTechnicalBaseline(projectRoot);
+    const latestEvidence = await buildDeploymentCodeEvidence({
+      projectRoot,
+      stack: latestDeploymentStack,
+      technicalBaseline,
+    });
+    const latestEvidenceStack = applyDeploymentCodeEvidenceToStack(latestDeploymentStack, latestEvidence);
     return !runtimeContractsEquivalent(spec.runtimeContract, latest) ||
-      deploymentStackDiffers(spec.detectedStack, latestDeploymentStack);
+      deploymentStackDiffers(spec.detectedStack, latestEvidenceStack) ||
+      spec.codeEvidence?.fingerprint !== latestEvidence.fingerprint;
   } catch {
     return false;
   }
@@ -1553,6 +1594,7 @@ function toPrepareResult(
     providerPolicy: spec.providerPolicy,
     providerCandidates: spec.providerCandidates,
     workspace: spec.workspace,
+    codeEvidence: spec.codeEvidence ?? null,
     environment: spec.environment,
     bootstrap: spec.bootstrap,
     compose: spec.compose,
@@ -1560,6 +1602,45 @@ function toPrepareResult(
     url: spec.runtime.url,
     reused: spec.files.reused,
   };
+}
+
+function assertDeploymentCodeEvidenceReady(
+  projectRoot: string,
+  evidence: DeploymentCodeEvidence,
+  evidenceRef: string,
+): void {
+  const retryCommand = {
+    name: "deploy prepare",
+    argv: ["deploy", "prepare"],
+  };
+  if (evidence.conflicts.length > 0) {
+    throw deployConflict("Deployment prepare found conflicting technology and repository evidence.", {
+      status: "blocked",
+      code: "DEPLOY_CONFLICT",
+      evidenceRef,
+      conflicts: evidence.conflicts,
+      warnings: evidence.warnings,
+      nextAction: "ask_user",
+      retryCommand,
+      projectRoot,
+    });
+  }
+  if (evidence.missingFacts.length > 0) {
+    const nextAction = evidence.missingFacts.some((fact) => fact.resolution === "ask_user")
+      ? "ask_user"
+      : "execution_repair";
+    throw deploySourceInsufficient("Deployment prepare could not derive a complete deployment source model.", {
+      status: "blocked",
+      code: "DEPLOY_SOURCE_INSUFFICIENT",
+      evidenceRef,
+      missingFacts: evidence.missingFacts,
+      ambiguous: evidence.dependencyFacts.ambiguous,
+      warnings: evidence.warnings,
+      nextAction,
+      retryCommand,
+      projectRoot,
+    });
+  }
 }
 
 async function loadDeploymentRuntimeContract(projectRoot: string, stack: DeploymentSpec["detectedStack"]): Promise<DeploymentSpec["runtimeContract"]> {
