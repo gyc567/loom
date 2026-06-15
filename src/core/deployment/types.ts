@@ -33,6 +33,52 @@ export type DeploymentHealthcheckInput = {
   timeoutMs?: number;
 };
 
+export type DeploymentOperationCommand =
+  | "deploy.run"
+  | "deploy.prepare"
+  | "deploy.up"
+  | "deploy.down"
+  | "deploy.bootstrap";
+
+export type DeploymentOperationPhase =
+  | "preparing"
+  | "building"
+  | "starting"
+  | "validating"
+  | "checking_status"
+  | "stopping"
+  | "bootstrapping"
+  | "completed"
+  | "failed";
+
+export type DeploymentActiveOperation = {
+  schemaVersion: 1;
+  operationId: string;
+  command: DeploymentOperationCommand;
+  phase: DeploymentOperationPhase;
+  pid: number;
+  projectRoot: string;
+  startedAt: string;
+  updatedAt: string;
+  logRef: string;
+  specRef: string | null;
+  status: "running" | "stale";
+};
+
+export type DeploymentActiveOperationView = DeploymentActiveOperation & {
+  operationActive: true;
+  elapsedMs: number;
+  activeOperationRef: string;
+  allowedCommands: readonly ["deploy status", "deploy inspect", "deploy logs"];
+  forbiddenActions: readonly [
+    "deploy run",
+    "deploy up",
+    "deploy down",
+    "raw docker compose",
+    "kill process",
+  ];
+};
+
 export type DeploymentComposePort = {
   hostPort: number | null;
   containerPort: number;
@@ -79,6 +125,115 @@ export type DependencyService = {
   volumeName: string | null;
   volumeTarget: string | null;
   reason: string;
+};
+
+export type DeploymentEvidenceRef = {
+  path: string;
+  reason: string;
+};
+
+export type DeploymentEvidenceConfidence = "low" | "medium" | "high";
+
+export type DeploymentEvidenceValue<T> = {
+  value: T;
+  confidence: DeploymentEvidenceConfidence;
+  evidence: DeploymentEvidenceRef[];
+};
+
+export type DeploymentCodeEvidenceTrack = {
+  status: string | null;
+  selection: string | null;
+  normalizedSelection: string | null;
+  source: string | null;
+  rationale: string | null;
+};
+
+export type DeploymentCodeEvidence = {
+  schemaVersion: 1;
+  evidenceId: string;
+  generatedAt: string;
+  fingerprint: string;
+  projectRoot: string;
+  technicalBaselineRef: string | null;
+  baselineExpectation: {
+    web: DeploymentCodeEvidenceTrack | null;
+    app: DeploymentCodeEvidenceTrack | null;
+    backend: DeploymentCodeEvidenceTrack | null;
+    persistence: DeploymentCodeEvidenceTrack | null;
+    dataAccess: DeploymentCodeEvidenceTrack | null;
+    externalServices: DeploymentCodeEvidenceTrack | null;
+  };
+  runtimeFacts: {
+    web: DeploymentEvidenceValue<string> | null;
+    backend: DeploymentEvidenceValue<string> | null;
+    fullstack: DeploymentEvidenceValue<string> | null;
+    workers: DeploymentEvidenceValue<string>[];
+  };
+  buildStartFacts: {
+    buildCommand: DeploymentEvidenceValue<string> | null;
+    startCommand: DeploymentEvidenceValue<string> | null;
+    port: DeploymentEvidenceValue<number> | null;
+    healthPath: DeploymentEvidenceValue<string> | null;
+    previewPath: DeploymentEvidenceValue<string> | null;
+    frontendOutputDir: DeploymentEvidenceValue<string> | null;
+    staticServing: DeploymentEvidenceValue<boolean> | null;
+  };
+  dependencyFacts: {
+    services: Array<DeploymentEvidenceValue<DependencyService>>;
+    embeddedStores: Array<DeploymentEvidenceValue<"sqlite" | "file">>;
+    ambiguous: Array<{
+      kind: "database" | "cache" | "queue" | "object_storage" | "search";
+      reason: string;
+      evidence: DeploymentEvidenceRef[];
+    }>;
+  };
+  environmentFacts: {
+    required: DeploymentEvidenceRef[];
+    provided: DeploymentEvidenceRef[];
+    generated: Record<string, string>;
+    missing: DeploymentEvidenceRef[];
+  };
+  existingDeployAssets: DeploymentEvidenceRef[];
+  conflicts: DeployConflict[];
+  missingFacts: DeployMissingFact[];
+  warnings: string[];
+};
+
+export type DeployConflict = {
+  conflictId: string;
+  type: "technical_baseline_code_conflict" | "deployment_asset_conflict" | "runtime_fact_conflict";
+  message: string;
+  left: DeploymentEvidenceRef;
+  right: DeploymentEvidenceRef;
+  resolution: "ask_user" | "execution_repair";
+};
+
+export type DeployMissingFact = {
+  factId: string;
+  type: "database_kind" | "build_command" | "start_command" | "probe" | "external_config";
+  message: string;
+  evidence: DeploymentEvidenceRef[];
+  resolution: "ask_user" | "execution_repair";
+};
+
+export type DeploymentCodeEvidenceSummary = {
+  ref: string;
+  fingerprint: string;
+  technicalBaselineRef: string | null;
+  runtimeFacts: {
+    web: string | null;
+    backend: string | null;
+    fullstack: string | null;
+  };
+  dependencyServices: Array<{
+    kind: DependencyServiceKind;
+    serviceName: string;
+    reason: string;
+  }>;
+  embeddedStores: string[];
+  warningCount: number;
+  conflictCount: number;
+  missingFactCount: number;
 };
 
 export type DetectedStack = {
@@ -136,7 +291,9 @@ export type DeploymentEnvSource =
   | "env-example"
   | "local-env-file"
   | "source-code"
-  | "framework";
+  | "configuration"
+  | "framework"
+  | "runtime-contract";
 
 export type DeploymentEnvVariable = {
   name: string;
@@ -220,6 +377,12 @@ export type DeploymentRuntimeContract = {
   healthPath: string | null;
   apiPaths: string[];
   frontendOutputDir: string | null;
+  probeKind: "http" | "process" | "command";
+  environment: {
+    required: string[];
+    optional: string[];
+  };
+  dependencyServices: DependencyService[];
 };
 
 export type DeploymentSpec = {
@@ -238,6 +401,7 @@ export type DeploymentSpec = {
   bootstrap: DeploymentBootstrapDiagnostics;
   compose: DeploymentComposeInfo;
   runtimeContract: DeploymentRuntimeContract;
+  codeEvidence?: DeploymentCodeEvidenceSummary;
   files: {
     dockerfilePath: string | null;
     composePath: string;
@@ -298,6 +462,7 @@ export type DeploymentFailureKind =
   | "runtime_contract_mismatch"
   | "build_command_failed"
   | "start_command_failed"
+  | "application_startup_failed"
   | "http_probe_failed"
   | "preview_not_verified"
   | "deploy_asset_invalid"

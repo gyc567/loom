@@ -9,6 +9,7 @@ import type {
   DeploymentWorkspace,
   DetectedStack,
   DeploymentSpec,
+  DeploymentCodeEvidenceSummary,
 } from "./types";
 import { toProjectRelative } from "../state/paths";
 import { generatedDependencyEnvironment, generatedRuntimeEnvironment } from "./env";
@@ -32,6 +33,7 @@ export function createDeploymentSpec(input: {
   environment: DeploymentEnvDiagnostics;
   bootstrap: DeploymentBootstrapDiagnostics;
   compose?: DeploymentComposeInfo;
+  codeEvidence?: DeploymentCodeEvidenceSummary;
   dockerfilePath: string;
   composePath: string;
   dockerignorePath: string;
@@ -63,6 +65,7 @@ export function createDeploymentSpec(input: {
     environment: input.environment,
     bootstrap: input.bootstrap,
     compose: input.compose ?? generatedComposeInfo(serviceName, input.detectedStack.port),
+    ...(input.codeEvidence ? { codeEvidence: input.codeEvidence } : {}),
     runtimeContract: {
       source: "heuristic",
       ref: null,
@@ -76,6 +79,12 @@ export function createDeploymentSpec(input: {
       healthPath: input.detectedStack.healthcheckPath ?? null,
       apiPaths: [],
       frontendOutputDir: input.detectedStack.outputDirectory,
+      probeKind: input.detectedStack.startCommand ? "http" : "process",
+      environment: {
+        required: [],
+        optional: [],
+      },
+      dependencyServices: [],
     },
     files: {
       dockerfilePath,
@@ -300,16 +309,16 @@ function generateJavaDockerfile(stack: DetectedStack): string {
   const builderImage = packageManager === "maven"
     ? `maven:3-eclipse-temurin-${javaVersion}`
     : `gradle:8-jdk${javaVersion}`;
-  const artifactDirectory = packageManager === "maven" ? "target" : "build/libs";
   const buildCommand = stack.buildCommand ?? javaBuildCommand(packageManager);
-  const startCommand = stack.startCommand ?? "java -jar /app/app.jar";
+  const startCommand = javaRuntimeStartCommand(stack.startCommand);
 
   return [
     `FROM ${builderImage} AS builder`,
     "WORKDIR /workspace",
+    ...javaFrontendToolchainLines(buildCommand),
     "COPY . .",
     `RUN ${buildCommand}`,
-    `RUN JAR=\"$(find ${artifactDirectory} -maxdepth 1 -type f -name '*.jar' ! -name '*-plain.jar' ! -name '*sources.jar' ! -name '*javadoc.jar' | head -n 1)\" && test -n \"$JAR\" && cp \"$JAR\" /workspace/app.jar`,
+    "RUN JAR=\"$(find . -type f -name '*.jar' ! -name '*-plain.jar' ! -name '*sources.jar' ! -name '*javadoc.jar' | sort | head -n 1)\" && test -n \"$JAR\" && cp \"$JAR\" /workspace/app.jar",
     "",
     `FROM eclipse-temurin:${javaVersion}-jre AS runner`,
     "WORKDIR /app",
@@ -427,7 +436,6 @@ function generateCompose(spec: DeploymentSpec, dockerfilePath: string): string {
     `      context: ${yamlString(contextPath)}`,
     `      dockerfile: ${yamlString(dockerfile)}`,
     `    image: ${spec.imageName}`,
-    `    container_name: loom-${service}`,
     "    ports:",
     `      - \"${port}\"`,
     ...yamlEnvironment(appEnvironment, 4),
@@ -658,6 +666,50 @@ function javaBuildCommand(packageManager: "maven" | "gradle"): string {
   return packageManager === "maven"
     ? "if [ -x ./mvnw ]; then ./mvnw -DskipTests package; else mvn -DskipTests package; fi"
     : "if [ -x ./gradlew ]; then ./gradlew build -x test; else gradle build -x test; fi";
+}
+
+function javaFrontendToolchainLines(buildCommand: string): string[] {
+  if (!requiresJavaScriptToolchain(buildCommand)) {
+    return [];
+  }
+
+  return [
+    "USER root",
+    "RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \\",
+    "  && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \\",
+    "  && apt-get install -y --no-install-recommends nodejs \\",
+    "  && corepack enable \\",
+    "  && rm -rf /var/lib/apt/lists/*",
+    ...(usesBun(buildCommand) ? ["RUN npm install -g bun"] : []),
+  ];
+}
+
+function requiresJavaScriptToolchain(command: string): boolean {
+  return commandTokenPattern(["npm", "npx", "pnpm", "yarn", "node", "bun", "vite", "next", "tsc"]).test(command);
+}
+
+function usesBun(command: string): boolean {
+  return commandTokenPattern(["bun"]).test(command);
+}
+
+function commandTokenPattern(tokens: string[]): RegExp {
+  return new RegExp(`(^|[\\s;&|()])(?:${tokens.map(escapeRegExp).join("|")})(?=$|[\\s;&|()])`);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function javaRuntimeStartCommand(command: string | null): string {
+  if (!command || /(^|[\/\s])(?:mvnw|mvn|gradlew|gradle)(\s|$)/.test(command)) {
+    return "java -jar /app/app.jar";
+  }
+
+  if (/(^|\s)java\s+/.test(command) && /\s-jar\s+/.test(command)) {
+    return command.replace(/(-jar\s+)(?:"[^"]+"|'[^']+'|\S+)/, "$1/app/app.jar");
+  }
+
+  return command;
 }
 
 function pythonInstallLines(packageManager: NonNullable<DetectedStack["packageManager"]>): string[] {

@@ -21,6 +21,7 @@ async function main() {
   await verifyDependencyServiceTokenBoundaries(join(root, "dependency-service-token-boundaries"));
   await verifyGoTemplate(join(root, "go-template"));
   await verifyJavaMavenTemplate(join(root, "java-maven-template"));
+  await verifyJavaMixedFrontendTemplate(join(root, "java-mixed-frontend-template"));
   await verifyDotnetAspnetTemplate(join(root, "dotnet-aspnet-template"));
   await verifyPhpLaravelTemplate(join(root, "php-laravel-template"));
   await verifyRubyRailsTemplate(join(root, "ruby-rails-template"));
@@ -32,16 +33,23 @@ async function main() {
   await verifyHealthcheckCandidateSelection(join(root, "healthcheck-candidates"));
   await verifyExistingComposeServiceSelection(join(root, "existing-compose-service-selection"));
   await verifyBootstrapDiagnostics(join(root, "bootstrap-diagnostics"));
+  await verifyNestedBootstrapDiagnostics(join(root, "nested-bootstrap-diagnostics"));
   await verifyRepairDiagnostics(join(root, "repair-diagnostics"));
   await verifyDeploymentAssetRepairAutoRunnableInstruction(join(root, "deployment-asset-repair-auto-runnable"));
   await verifyRegistryNetworkRepair(join(root, "registry-network-repair"));
   await verifyRuntimeContractPrepare(join(root, "runtime-contract-prepare"));
   await verifyRuntimeContractPromotesRootWorkspaceWhenChildrenAreSourceOnly(join(root, "runtime-contract-root-workspace"));
   await verifyRuntimeContractSuppressesHeuristicDependencyServices(join(root, "runtime-contract-suppresses-heuristic-deps"));
+  await verifyRuntimeContractDerivesDependencyServicesFromEnvironment(join(root, "runtime-contract-env-deps"));
+  await verifyRuntimeContractUsesDetectedSqlServiceForGenericDatasource(join(root, "runtime-contract-generic-datasource"));
   await verifyStaleRuntimeContractSpecReprepare(join(root, "runtime-contract-stale-reprepare"));
   await verifyDeployUsesPreviousCompletedPhaseRuntimeContract(join(root, "runtime-contract-previous-completed-phase"));
+  await verifyTechnicalBaselineOnlyDoesNotProvisionDatabase(join(root, "technical-baseline-only-db"));
+  await verifyUnknownDatabaseKindBlocksPrepare(join(root, "unknown-database-kind"));
+  await verifyBaselineDatabaseConflictBlocksPrepare(join(root, "baseline-database-conflict"));
   await verifyDeployRunDockerUnavailableWritesRepairRequest(join(root, "docker-unavailable-repair"));
   await verifyRuntimeContractStartFailureRoutesToDeliveryRepair(join(root, "runtime-contract-start-failure"));
+  await verifyApplicationStartupFailureRoutesToExecutionRepair(join(root, "application-startup-failure"));
   await verifyRuntimeContractBuildFailureRoutesToDeliveryRepair(join(root, "runtime-contract-build-failure"));
   await verifyHealthcheckOverrides(join(root, "healthcheck-overrides"));
   await verifyBootstrapCommandPreviewAndConfirm(join(root, "bootstrap-command-preview-confirm"));
@@ -86,6 +94,7 @@ async function verifyGeneratedTemplate(projectRoot) {
   assert.match(compose, /postgres:16-alpine/);
   assert.match(compose, /redis:7-alpine/);
   assert.match(compose, /healthcheck:/);
+  assert.doesNotMatch(compose, /container_name:/);
   assert.doesNotMatch(compose, /ports:\n\s+- "5432:5432"/);
 
   const validation = runDeployValidate(projectRoot);
@@ -534,6 +543,60 @@ async function verifyJavaMavenTemplate(projectRoot) {
   assert.match(compose, /postgres:16-alpine/);
 }
 
+async function verifyJavaMixedFrontendTemplate(projectRoot) {
+  await mkdir(join(projectRoot, "src/main/resources"), { recursive: true });
+  await mkdir(join(projectRoot, "apps/web"), { recursive: true });
+  await writeFile(join(projectRoot, "pom.xml"), [
+    "<project>",
+    "  <properties>",
+    "    <java.version>21</java.version>",
+    "  </properties>",
+    "  <dependencies>",
+    "    <dependency>",
+    "      <groupId>org.springframework.boot</groupId>",
+    "      <artifactId>spring-boot-starter-web</artifactId>",
+    "    </dependency>",
+    "  </dependencies>",
+    "</project>",
+    "",
+  ].join("\n"), "utf8");
+  await writeFile(join(projectRoot, "src/main/resources/application.properties"), "server.port=8088\n", "utf8");
+  await writeFile(join(projectRoot, "apps/web/package.json"), `${JSON.stringify({
+    scripts: {
+      build: "vite build",
+    },
+    dependencies: {
+      vite: "^6.0.0",
+    },
+  }, null, 2)}\n`, "utf8");
+  await writeAcceptedRuntimeDelivery(projectRoot, {
+    runtimeKind: "spring_boot_serves_vite_static",
+    startPort: 8088,
+    buildCommand: "npm --prefix apps/web run build && mvn -DskipTests package",
+    startCommand: "java -jar target/demo.jar --spring.profiles.active=local",
+    previewPath: "/",
+    healthPath: "/actuator/health",
+    frontendOutputDir: "apps/web/dist",
+  });
+
+  const envelope = runDeployPrepare(projectRoot);
+  assert.equal(envelope.ok, true);
+  assert.equal(envelope.data.detectedStack.kind, "java");
+  assert.equal(envelope.data.detectedStack.buildCommand, "npm --prefix apps/web run build && mvn -DskipTests package");
+
+  const dockerfile = await readFile(join(projectRoot, ".loom/deployment/specs/generated/Dockerfile"), "utf8");
+  assert.match(dockerfile, /USER root/);
+  assert.match(dockerfile, /apt-get install -y --no-install-recommends curl ca-certificates/);
+  assert.match(dockerfile, /apt-get install -y --no-install-recommends nodejs/);
+  assert.match(dockerfile, /corepack enable/);
+  assert.match(dockerfile, /RUN npm --prefix apps\/web run build && mvn -DskipTests package/);
+  assert.match(dockerfile, /find \. -type f -name '\*\.jar'/);
+  assert.match(dockerfile, /CMD \["sh","-c","java -jar \/app\/app\.jar --spring\.profiles\.active=local"\]/);
+
+  const compose = await readFile(join(projectRoot, ".loom/deployment/specs/generated/compose.yaml"), "utf8");
+  assert.doesNotMatch(compose, /container_name:/);
+}
+
 async function verifyDotnetAspnetTemplate(projectRoot) {
   await mkdir(projectRoot, { recursive: true });
   await writeFile(join(projectRoot, "App.csproj"), [
@@ -890,6 +953,37 @@ async function verifyBootstrapDiagnostics(projectRoot) {
   assert.ok(spec.bootstrap.tasks.some((task) => task.kind === "prisma"));
   assert.equal(spec.bootstrap.tasks.find((task) => task.kind === "prisma").automatic, false);
   assert.match(spec.bootstrap.warnings.join("\n"), /does not run migrations automatically/);
+}
+
+async function verifyNestedBootstrapDiagnostics(projectRoot) {
+  await mkdir(join(projectRoot, "apps/api/prisma"), { recursive: true });
+  await mkdir(join(projectRoot, "apps/api/src/main/resources/db/migration"), { recursive: true });
+  await writePackage(projectRoot, {
+    scripts: {
+      start: "node server.js",
+    },
+    dependencies: {
+      express: "^4.18.0",
+    },
+  });
+  await writeFile(join(projectRoot, "server.js"), "console.log('ok')\n", "utf8");
+  await writeFile(join(projectRoot, "apps/api/package.json"), `${JSON.stringify({
+    scripts: {
+      migrate: "prisma migrate deploy",
+    },
+    dependencies: {
+      prisma: "^6.0.0",
+    },
+  }, null, 2)}\n`, "utf8");
+  await writeFile(join(projectRoot, "apps/api/prisma/schema.prisma"), "datasource db { provider = \"mysql\" url = env(\"DATABASE_URL\") }\n", "utf8");
+  await writeFile(join(projectRoot, "apps/api/src/main/resources/db/migration/V1__init.sql"), "select 1;\n", "utf8");
+
+  const envelope = runDeployPrepare(projectRoot);
+  assert.equal(envelope.ok, true);
+
+  const spec = JSON.parse(await readFile(join(projectRoot, ".loom/deployment/specs/local.json"), "utf8"));
+  assert.ok(spec.bootstrap.tasks.some((task) => task.kind === "prisma" && task.command === "cd \"apps/api\" && npx prisma migrate deploy"));
+  assert.ok(spec.bootstrap.tasks.some((task) => task.kind === "flyway" && task.command === "cd \"apps/api\" && flyway migrate"));
 }
 
 async function verifyRepairDiagnostics(projectRoot) {
@@ -1267,6 +1361,115 @@ async function verifyRuntimeContractSuppressesHeuristicDependencyServices(projec
   assert.doesNotMatch(compose, /DATABASE_URL: "postgresql:\/\/loom:loom@postgres:5432\/loom"/);
 }
 
+async function verifyRuntimeContractDerivesDependencyServicesFromEnvironment(projectRoot) {
+  await writePackage(projectRoot, {
+    scripts: {
+      build: "vite build && tsc -p tsconfig.server.json",
+      start: "node dist/server.js",
+    },
+    dependencies: {
+      express: "^4.18.0",
+      vite: "^6.0.0",
+    },
+  });
+  await writeFile(join(projectRoot, "server.js"), "console.log(process.env.SPRING_DATASOURCE_URL)\n", "utf8");
+  await writeAcceptedRuntimeDelivery(projectRoot, {
+    runtimeKind: "spring_boot_postgres_serves_vite_static",
+    startPort: 4173,
+    buildCommand: "npm run build",
+    startCommand: "npm run start",
+    previewPath: "/",
+    healthPath: "/ready",
+    frontendOutputDir: "dist/web",
+    environment: {
+      required: [
+        "PORT",
+        "SPRING_DATASOURCE_URL",
+        "SPRING_DATASOURCE_USERNAME",
+        "SPRING_DATASOURCE_PASSWORD",
+      ],
+      optional: ["SPRING_PROFILES_ACTIVE"],
+    },
+  });
+  await writeTechnicalBaseline(projectRoot, {
+    backend: "Java + Spring Boot",
+    persistence: "PostgreSQL",
+    dataAccess: "Spring Data JPA",
+    web: "React + Vite",
+  });
+
+  const prepare = runDeployPrepare(projectRoot);
+  assert.equal(prepare.ok, true);
+
+  const spec = JSON.parse(await readFile(join(projectRoot, ".loom/deployment/specs/local.json"), "utf8"));
+  assert.equal(spec.runtimeContract.dependencyServicePolicy, "contract_only");
+  assert.equal(spec.runtimeContract.probeKind, "http");
+  assert.deepEqual(spec.runtimeContract.environment.required, [
+    "PORT",
+    "SPRING_DATASOURCE_URL",
+    "SPRING_DATASOURCE_USERNAME",
+    "SPRING_DATASOURCE_PASSWORD",
+  ]);
+  assert.ok(spec.runtimeContract.dependencyServices.some((service) => service.kind === "postgres"));
+  assert.ok(spec.detectedStack.services.some((service) => service.kind === "postgres"));
+  assert.ok(spec.environment.provided.includes("SPRING_DATASOURCE_URL"));
+  assert.ok(!spec.environment.missing.some((variable) => variable.name === "SPRING_DATASOURCE_URL"));
+
+  const compose = await readFile(join(projectRoot, ".loom/deployment/specs/generated/compose.yaml"), "utf8");
+  assert.match(compose, /postgres:16-alpine/);
+  assert.match(compose, /SPRING_DATASOURCE_URL: "jdbc:postgresql:\/\/postgres:5432\/loom"/);
+}
+
+async function verifyRuntimeContractUsesDetectedSqlServiceForGenericDatasource(projectRoot) {
+  await mkdir(join(projectRoot, "src/main/resources"), { recursive: true });
+  await writeFile(join(projectRoot, "pom.xml"), [
+    "<project>",
+    "  <properties>",
+    "    <java.version>21</java.version>",
+    "  </properties>",
+    "  <dependencies>",
+    "    <dependency>",
+    "      <groupId>com.mysql</groupId>",
+    "      <artifactId>mysql-connector-j</artifactId>",
+    "    </dependency>",
+    "  </dependencies>",
+    "</project>",
+    "",
+  ].join("\n"), "utf8");
+  await writeFile(join(projectRoot, "src/main/resources/application.properties"), "spring.datasource.url=${SPRING_DATASOURCE_URL}\n", "utf8");
+  await writeAcceptedRuntimeDelivery(projectRoot, {
+    runtimeKind: "spring_boot_serves_static",
+    startPort: 8080,
+    buildCommand: "mvn -DskipTests package",
+    startCommand: "java -jar target/demo.jar",
+    previewPath: "/",
+    healthPath: "/actuator/health",
+    frontendOutputDir: "dist",
+    environment: {
+      required: [
+        "SPRING_DATASOURCE_URL",
+        "SPRING_DATASOURCE_USERNAME",
+        "SPRING_DATASOURCE_PASSWORD",
+      ],
+      optional: ["PORT"],
+    },
+  });
+
+  const prepare = runDeployPrepare(projectRoot);
+  assert.equal(prepare.ok, true);
+
+  const spec = JSON.parse(await readFile(join(projectRoot, ".loom/deployment/specs/local.json"), "utf8"));
+  assert.equal(spec.runtimeContract.dependencyServices.length, 0);
+  assert.ok(spec.detectedStack.services.some((service) => service.kind === "mysql"));
+  assert.ok(!spec.detectedStack.services.some((service) => service.kind === "postgres"));
+  assert.ok(spec.environment.provided.includes("SPRING_DATASOURCE_URL"));
+
+  const compose = await readFile(join(projectRoot, ".loom/deployment/specs/generated/compose.yaml"), "utf8");
+  assert.match(compose, /mysql:8/);
+  assert.match(compose, /SPRING_DATASOURCE_URL: "jdbc:mysql:\/\/mysql:3306\/loom"/);
+  assert.doesNotMatch(compose, /postgres:16-alpine/);
+}
+
 async function verifyStaleRuntimeContractSpecReprepare(projectRoot) {
   await writePackage(projectRoot, {
     scripts: {
@@ -1302,11 +1505,11 @@ async function verifyStaleRuntimeContractSpecReprepare(projectRoot) {
   spec = JSON.parse(await readFile(join(projectRoot, ".loom/deployment/specs/local.json"), "utf8"));
   assert.equal(spec.runtimeContract.source, "accepted_aac");
   assert.equal(spec.runtimeContract.dependencyServicePolicy, "contract_only");
-  assert.deepEqual(spec.detectedStack.services, []);
+  assert.ok(spec.detectedStack.services.some((service) => service.kind === "postgres"));
   assert.equal(spec.runtime.containerPort, 4173);
 
   const compose = await readFile(join(projectRoot, ".loom/deployment/specs/generated/compose.yaml"), "utf8");
-  assert.doesNotMatch(compose, /postgres:16-alpine/);
+  assert.match(compose, /postgres:16-alpine/);
   assert.match(compose, /4173:4173/);
 }
 
@@ -1343,11 +1546,105 @@ async function verifyDeployUsesPreviousCompletedPhaseRuntimeContract(projectRoot
   assert.equal(spec.runtimeContract.source, "accepted_aac");
   assert.equal(spec.runtimeContract.ref, ".loom/deliveries/delivery-runtime/artifacts/architecture/phase-1/aac.json#/runtimeDelivery");
   assert.equal(spec.runtimeContract.dependencyServicePolicy, "contract_only");
-  assert.deepEqual(spec.detectedStack.services, []);
+  assert.ok(spec.detectedStack.services.some((service) => service.kind === "postgres"));
+
+  const compose = await readFile(join(projectRoot, ".loom/deployment/specs/generated/compose.yaml"), "utf8");
+  assert.match(compose, /postgres:16-alpine/);
+  assert.match(compose, /DATABASE_URL: "postgresql:\/\/loom:loom@postgres:5432\/loom"/);
+}
+
+async function verifyTechnicalBaselineOnlyDoesNotProvisionDatabase(projectRoot) {
+  await writePackage(projectRoot, {
+    scripts: {
+      build: "vite build",
+      start: "vite preview --host 0.0.0.0 --port 4173",
+    },
+    dependencies: {
+      vite: "^6.0.0",
+    },
+  });
+  await writeAcceptedRuntimeDelivery(projectRoot, {
+    startPort: 4173,
+    buildCommand: "npm run build",
+    startCommand: "npm run start",
+    previewPath: "/",
+    healthPath: "/",
+    frontendOutputDir: "dist",
+  });
+  await writeTechnicalBaseline(projectRoot, {
+    web: "React + Vite",
+    backend: "No independent backend",
+    persistence: "PostgreSQL",
+    dataAccess: "Prisma",
+  });
+
+  const prepare = runDeployPrepare(projectRoot);
+  assert.equal(prepare.ok, true);
+  const spec = JSON.parse(await readFile(join(projectRoot, ".loom/deployment/specs/local.json"), "utf8"));
+  assert.equal(spec.codeEvidence.warningCount, 1);
+  assert.ok(!spec.detectedStack.services.some((service) => service.kind === "postgres"));
+
+  const evidence = JSON.parse(await readFile(join(projectRoot, ".loom/deployment/evidence/latest-code-evidence.json"), "utf8"));
+  assert.match(evidence.warnings.join("\n"), /will not start that service from baseline alone/i);
 
   const compose = await readFile(join(projectRoot, ".loom/deployment/specs/generated/compose.yaml"), "utf8");
   assert.doesNotMatch(compose, /postgres:16-alpine/);
-  assert.doesNotMatch(compose, /DATABASE_URL: "postgresql:\/\/loom:loom@postgres:5432\/loom"/);
+}
+
+async function verifyUnknownDatabaseKindBlocksPrepare(projectRoot) {
+  await writePackage(projectRoot, {
+    scripts: {
+      start: "node server.js",
+    },
+    dependencies: {
+      express: "^4.18.0",
+    },
+  });
+  await writeFile(join(projectRoot, "server.js"), "console.log(process.env.DATABASE_URL)\n", "utf8");
+
+  const prepare = runDeployPrepare(projectRoot, [], [2]);
+  assert.equal(prepare.ok, false);
+  assert.equal(prepare.error.code, "DEPLOY_SOURCE_INSUFFICIENT");
+  assert.equal(prepare.error.details.code, "DEPLOY_SOURCE_INSUFFICIENT");
+  assert.equal(prepare.error.details.nextAction, "execution_repair");
+  assert.ok(prepare.error.details.missingFacts.some((fact) => fact.type === "database_kind"));
+  assert.ok(await fileExists(join(projectRoot, ".loom/deployment/evidence/latest-code-evidence.json")));
+  assert.equal(await fileExists(join(projectRoot, ".loom/deployment/specs/generated/compose.yaml")), false);
+}
+
+async function verifyBaselineDatabaseConflictBlocksPrepare(projectRoot) {
+  await writePackage(projectRoot, {
+    scripts: {
+      start: "node server.js",
+    },
+    dependencies: {
+      express: "^4.18.0",
+      mysql2: "^3.0.0",
+    },
+  });
+  await writeFile(join(projectRoot, "server.js"), "console.log(process.env.DATABASE_URL)\n", "utf8");
+  await writeAcceptedRuntimeDelivery(projectRoot, {
+    startPort: 4173,
+    buildCommand: "npm run build",
+    startCommand: "npm run start",
+    previewPath: "/",
+    healthPath: "/",
+    frontendOutputDir: "dist",
+  });
+  await writeTechnicalBaseline(projectRoot, {
+    backend: "Node.js + Express",
+    persistence: "PostgreSQL",
+    dataAccess: "Raw SQL / lightweight wrapper",
+  });
+
+  const prepare = runDeployPrepare(projectRoot, [], [2]);
+  assert.equal(prepare.ok, false);
+  assert.equal(prepare.error.code, "DEPLOY_CONFLICT");
+  assert.equal(prepare.error.details.code, "DEPLOY_CONFLICT");
+  assert.equal(prepare.error.details.nextAction, "ask_user");
+  assert.ok(prepare.error.details.conflicts.some((conflict) => conflict.type === "technical_baseline_code_conflict"));
+  assert.ok(await fileExists(join(projectRoot, ".loom/deployment/evidence/latest-code-evidence.json")));
+  assert.equal(await fileExists(join(projectRoot, ".loom/deployment/specs/generated/compose.yaml")), false);
 }
 
 async function verifyDeployRunDockerUnavailableWritesRepairRequest(projectRoot) {
@@ -1449,6 +1746,59 @@ async function verifyRuntimeContractStartFailureRoutesToDeliveryRepair(projectRo
     "--failure-ref",
     ".loom/deployment/state/latest-failure.json",
   ]);
+}
+
+async function verifyApplicationStartupFailureRoutesToExecutionRepair(projectRoot) {
+  const binDir = join(projectRoot, "mock-bin");
+  await mkdir(binDir, { recursive: true });
+  await writePackage(projectRoot, {
+    scripts: {
+      build: "node -e \"require('fs').mkdirSync('dist', { recursive: true })\"",
+      start: "node dist/server.js",
+    },
+    dependencies: {
+      express: "^4.18.0",
+    },
+  });
+  await writeFile(join(projectRoot, "server.js"), "console.log('ok')\n", "utf8");
+  await writeAcceptedRuntimeDelivery(projectRoot, {
+    startPort: 8080,
+    buildCommand: "npm run build",
+    startCommand: "npm run start",
+    previewPath: "/",
+    healthPath: "/actuator/health",
+    frontendOutputDir: "dist/web",
+  });
+  await writeFile(join(projectRoot, "mock-bin/docker"), [
+    "#!/bin/sh",
+    "if [ \"$1\" = \"compose\" ] && [ \"$4\" = \"config\" ]; then exit 0; fi",
+    "if [ \"$1\" = \"version\" ]; then echo '25.0.0'; exit 0; fi",
+    "if [ \"$1\" = \"compose\" ] && [ \"$4\" = \"up\" ]; then exit 0; fi",
+    "if [ \"$1\" = \"inspect\" ]; then echo 'container-id true'; exit 0; fi",
+    "if [ \"$1\" = \"compose\" ] && [ \"$4\" = \"logs\" ]; then",
+    "  echo 'app | org.springframework.boot.context.event.ApplicationFailedEvent'",
+    "  echo 'app | APPLICATION FAILED TO START'",
+    "  echo 'app | org.flywaydb.core.api.FlywayException: Unsupported Database: PostgreSQL 15.18'",
+    "  exit 0",
+    "fi",
+    "exit 0",
+    "",
+  ].join("\n"), "utf8");
+  await chmod(join(projectRoot, "mock-bin/docker"), 0o755);
+
+  const run = runDeployRun(projectRoot, {
+    PATH: `${binDir}:${process.env.PATH}`,
+  });
+  assert.equal(run.ok, true);
+  assert.equal(run.data.completed, false);
+  assert.equal(run.data.failedPhase, "up");
+  assert.equal(run.data.nextAction, "execution_repair");
+  assert.equal(run.data.repair.failureKind, "application_startup_failed");
+  assert.equal(run.data.repair.failureOwner, "application_code");
+  assert.equal(run.data.repair.repairRoute, "execution_repair");
+  assert.deepEqual(run.data.repair.editableFiles, []);
+  assert.ok(run.data.repair.diagnostics.some((diagnostic) => diagnostic.code === "framework_startup_failed"));
+  assert.ok(run.data.repair.errorWindow.lines.some((line) => /FlywayException|APPLICATION FAILED TO START/.test(line)));
 }
 
 async function verifyRuntimeContractBuildFailureRoutesToDeliveryRepair(projectRoot) {
@@ -2098,6 +2448,55 @@ async function writePackage(projectRoot, pkg) {
   await writeFile(join(projectRoot, "package.json"), `${JSON.stringify(pkg, null, 2)}\n`, "utf8");
 }
 
+async function writeTechnicalBaseline(projectRoot, input = {}) {
+  const deliveryId = "delivery-runtime";
+  const now = new Date().toISOString();
+  const contractsDir = join(projectRoot, ".loom/deliveries", deliveryId, "contracts");
+  await mkdir(contractsDir, { recursive: true });
+  await writeFile(join(contractsDir, "technical-baseline.json"), `${JSON.stringify({
+    schemaVersion: "1.0",
+    technicalBaselineId: "tb-runtime",
+    status: "confirmed",
+    source: "user_specified",
+    projectKind: "greenfield",
+    scope: "roadmap",
+    stack: {
+      tracks: {
+        web: track(input.web ?? "No Web client"),
+        app: track(input.app ?? "No App client"),
+        backend: track(input.backend ?? "No independent backend"),
+        persistence: track(input.persistence ?? "No persistence yet"),
+        dataAccess: track(input.dataAccess ?? "No ORM"),
+        externalServices: track(input.externalServices ?? "None"),
+      },
+      derivedLater: ["testing", "build", "local run", "deployment preparation"],
+    },
+    constraints: [],
+    evidence: [{ reason: "Deploy smoke test technical baseline fixture." }],
+    approval: {
+      type: "user_confirmed",
+      confirmedAt: now,
+      confirmedBy: "test",
+    },
+    confidence: "high",
+    reasoningSummary: ["Deploy smoke test baseline."],
+    alternatives: [],
+    createdAt: now,
+    updatedAt: now,
+  }, null, 2)}\n`, "utf8");
+}
+
+function track(selection) {
+  const normalized = String(selection).toLowerCase();
+  const notNeeded = /no |none|不需要/.test(normalized);
+  return {
+    status: notNeeded ? "not_needed" : "selected",
+    selection,
+    source: "user_specified",
+    rationale: "Deploy smoke test fixture.",
+  };
+}
+
 async function writeAcceptedRuntimeDelivery(projectRoot, input) {
   const deliveryId = "delivery-runtime";
   const phaseId = "phase-1";
@@ -2182,7 +2581,7 @@ async function writeAcceptedRuntimeDelivery(projectRoot, input) {
     runtimeDelivery: {
       status: "modified",
       contractVersion: "phase-1-v1",
-      runtimeKind: "node_express_serves_vite_static",
+      runtimeKind: input.runtimeKind ?? "node_express_serves_vite_static",
       basis: { technicalBaselineRef: "technical-baseline", repositoryContextRef: "repository-context", planningGenerationContractRef: "planning-contract", previousRuntimeDeliveryRef: null, reason: "Deploy smoke fixture runtime contract." },
       build: { command: input.buildCommand, workingDirectory: ".", outputs: ["dist/server", input.frontendOutputDir], codeLevelExpectations: ["Build produces server and frontend outputs."] },
       start: { command: input.startCommand, workingDirectory: ".", entry: "dist/server.js", host: "0.0.0.0", port: input.startPort, portEnv: "PORT", codeLevelExpectations: ["Start serves the app on the declared port."] },
@@ -2195,7 +2594,7 @@ async function writeAcceptedRuntimeDelivery(projectRoot, input) {
       httpProbes: { previewPath: input.previewPath, healthPath: input.healthPath, apiPaths: ["/api/health"], expectedStatus: "2xx_or_3xx" },
       frontend: { required: true, kind: "vite_react", buildCommand: "npm run build:web", sourceRoot: "src/ui", outputDir: input.frontendOutputDir, servedBy: "express_static", servedByRef: "src/server.ts", codeLevelExpectations: ["Frontend output is mounted by the server."] },
       api: { required: true, kind: "express", buildCommand: "npm run build:api", entry: "dist/server.js", basePath: "/api", probePaths: ["/api/health"], codeLevelExpectations: ["Health API remains available."] },
-      environment: { required: [], optional: ["PORT"] },
+      environment: input.environment ?? { required: [], optional: ["PORT"] },
       taskPlanningGuidance: {
         requireRuntimeDeliveryRequirementWhenTaskTouches: ["build_or_packaging", "runtime_entry", "serving_or_routing", "configuration_or_environment", "generated_artifacts", "runtime_surface"],
         doNotRequireForTaskKinds: ["domain_only_validation", "copy_only_documentation", "pure_unit_test_additions"],

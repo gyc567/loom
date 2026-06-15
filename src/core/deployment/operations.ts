@@ -1,11 +1,24 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { deployNotRunning, deployValidationFailed, dockerUnavailable, LoomError } from "../errors";
+import { deployConflict, deployNotRunning, deploySourceInsufficient, deployValidationFailed, dockerUnavailable, LoomError } from "../errors";
 import { ensureDir, pathExists, readJsonFile } from "../state/fs";
 import { architectureContractPath, architectureLatestPath, toProjectRelative } from "../state/paths";
 import { getActiveLocator, loadDeliveryIndex } from "../state/delivery";
 import { architectureArtifactContractSchema } from "../contracts";
 import { analyzeDeploymentBootstrap } from "./bootstrap";
+import {
+  assertNoActiveDeploymentOperation,
+  readDeploymentOperationView,
+  updateDeploymentOperationPhase,
+  withDeploymentOperation,
+  type DeploymentOperationHandle,
+} from "./active-operation";
+import {
+  applyDeploymentCodeEvidenceToStack,
+  buildDeploymentCodeEvidence,
+  loadDeploymentTechnicalBaseline,
+  writeDeploymentCodeEvidence,
+} from "./code-evidence";
 import { DEFAULT_DEPLOY_BUILD_TIMEOUT_MS } from "./constants";
 import { diagnoseDeploymentFailure } from "./diagnostics";
 import {
@@ -64,6 +77,8 @@ import type {
   DeploymentRepairRoute,
   DeploymentSpec,
   DeploymentState,
+  DeploymentCodeEvidence,
+  DeploymentActiveOperationView,
   DeployProvider,
 } from "./types";
 
@@ -76,12 +91,18 @@ export type DeployPrepareResult = {
   providerPolicy: DeploymentSpec["providerPolicy"];
   providerCandidates: DeploymentSpec["providerCandidates"];
   workspace: DeploymentSpec["workspace"];
+  codeEvidence: DeploymentSpec["codeEvidence"] | null;
   environment: DeploymentSpec["environment"];
   bootstrap: DeploymentSpec["bootstrap"];
   compose: DeploymentSpec["compose"];
   files: DeploymentSpec["files"];
   url: string;
   reused: string[];
+};
+
+type DeployOperationAwareResult = {
+  operationActive?: boolean;
+  activeOperation?: DeploymentActiveOperationView | null;
 };
 
 export type DeployUpResult = {
@@ -93,7 +114,7 @@ export type DeployUpResult = {
   composePath: string;
   health: DeploymentHealth;
   instruction?: Record<string, unknown>;
-};
+} & DeployOperationAwareResult;
 
 export type DeployStatusResult = {
   running: boolean;
@@ -103,7 +124,7 @@ export type DeployStatusResult = {
   appServiceName: string | null;
   health: DeploymentHealth | null;
   instruction?: Record<string, unknown>;
-};
+} & DeployOperationAwareResult;
 
 export type DeployValidateResult = {
   valid: boolean;
@@ -122,7 +143,7 @@ export type DeployLogsResult = {
   lines: string[];
   truncated: boolean;
   fullLogRef: string;
-};
+} & DeployOperationAwareResult;
 
 export type DeployDownResult = {
   stopped: boolean;
@@ -174,6 +195,7 @@ export type DeployInspectResult = {
   providerPolicy: DeploymentSpec["providerPolicy"] | null;
   providerCandidates: DeploymentSpec["providerCandidates"];
   workspace: DeploymentSpec["workspace"] | null;
+  codeEvidence: DeploymentSpec["codeEvidence"] | null;
   detectedStack: DeploymentSpec["detectedStack"] | null;
   files: DeploymentSpec["files"] | null;
   compose: DeploymentSpec["compose"] | null;
@@ -196,7 +218,7 @@ export type DeployInspectResult = {
     bootstrapTaskCount: number;
     hasRepairRequest: boolean;
   };
-};
+} & DeployOperationAwareResult;
 
 export type DeployRunResult = {
   completed: boolean;
@@ -225,10 +247,24 @@ export async function deployPrepare(input: {
   healthcheck?: DeploymentHealthcheckInput;
   providerPolicy?: Partial<DeploymentProviderPolicy>;
 }): Promise<DeployPrepareResult> {
+  return withDeploymentOperation(
+    { projectRoot: input.projectRoot, command: "deploy.prepare", phase: "preparing" },
+    (operation) => deployPrepareInternal(input, operation),
+  );
+}
+
+async function deployPrepareInternal(input: {
+  projectRoot: string;
+  appPath?: string;
+  healthcheck?: DeploymentHealthcheckInput;
+  providerPolicy?: Partial<DeploymentProviderPolicy>;
+}, operation?: DeploymentOperationHandle): Promise<DeployPrepareResult> {
+  await updateDeploymentOperationPhase(input.projectRoot, operation, "preparing");
   const paths = getDeploymentPaths(input.projectRoot);
   await ensureDir(paths.specsDir);
   await ensureDir(paths.stateDir);
   await ensureDir(paths.logsDir);
+  await ensureDir(paths.evidenceDir);
   await ensureDir(paths.generatedDir);
 
   const workspace = await resolveDeploymentWorkspaceForApp(input.projectRoot, input.appPath ?? null);
@@ -249,7 +285,16 @@ export async function deployPrepare(input: {
   };
   const runtimeContract = await loadDeploymentRuntimeContract(input.projectRoot, stackForContext);
   const contractStack = applyRuntimeContractToStack(stackForContext, runtimeContract);
-  const hostPort = await findAvailablePort(contractStack.port);
+  const technicalBaseline = await loadDeploymentTechnicalBaseline(input.projectRoot);
+  const rawCodeEvidence = await buildDeploymentCodeEvidence({
+    projectRoot: input.projectRoot,
+    stack: contractStack,
+    technicalBaseline,
+  });
+  const codeEvidence = await writeDeploymentCodeEvidence(input.projectRoot, rawCodeEvidence);
+  assertDeploymentCodeEvidenceReady(input.projectRoot, rawCodeEvidence, codeEvidence.ref);
+  const evidenceStack = applyDeploymentCodeEvidenceToStack(contractStack, rawCodeEvidence);
+  const hostPort = await findAvailablePort(evidenceStack.port);
   const workspaceMetadata = {
     ...workspace.workspace,
     buildContextPath: toProjectRelative(input.projectRoot, generatedBuildContextRoot) || ".",
@@ -257,15 +302,16 @@ export async function deployPrepare(input: {
   const environment = await analyzeDeploymentEnvironment({
     projectRoot: input.projectRoot,
     deploymentRoot,
-    stack: contractStack,
+    stack: evidenceStack,
     generatedEnvironment: {
-      ...generatedRuntimeEnvironment(contractStack),
-      ...generatedDependencyEnvironment(contractStack),
+      ...generatedRuntimeEnvironment(evidenceStack),
+      ...generatedDependencyEnvironment(evidenceStack),
     },
+    contractEnvironment: runtimeContract.environment,
   });
   const bootstrap = await analyzeDeploymentBootstrap({
     deploymentRoot,
-    stack: contractStack,
+    stack: evidenceStack,
   });
 
   if (strategy.provider === "compose-existing" && existing.composePath) {
@@ -276,8 +322,8 @@ export async function deployPrepare(input: {
       ...(existing.dockerfilePath ? [toProjectRelative(input.projectRoot, existing.dockerfilePath)] : []),
     ];
     const composeStack = composePort
-      ? { ...contractStack, port: composePort.containerPort }
-      : contractStack;
+      ? { ...evidenceStack, port: composePort.containerPort }
+      : evidenceStack;
     const spec = applyHealthcheckInput(createDeploymentSpec({
       projectRoot: input.projectRoot,
       deploymentRoot,
@@ -294,6 +340,7 @@ export async function deployPrepare(input: {
       environment,
       bootstrap,
       compose: composeInfo,
+      codeEvidence,
       dockerfilePath: existing.dockerfilePath ?? paths.dockerfileFile,
       composePath: existing.composePath,
       dockerignorePath: paths.dockerignoreFile,
@@ -327,9 +374,10 @@ export async function deployPrepare(input: {
       providerReason: strategy.reason,
       providerPolicy: strategy.policy,
       providerCandidates: strategy.candidates,
-      detectedStack: contractStack,
+      detectedStack: evidenceStack,
       environment,
       bootstrap,
+      codeEvidence,
       dockerfilePath: existing.dockerfilePath,
       composePath: paths.composeFile,
       dockerignorePath: paths.dockerignoreFile,
@@ -355,9 +403,10 @@ export async function deployPrepare(input: {
     providerReason: strategy.reason,
     providerPolicy: strategy.policy,
     providerCandidates: strategy.candidates,
-    detectedStack: contractStack,
+    detectedStack: evidenceStack,
     environment,
     bootstrap,
+    codeEvidence,
     dockerfilePath: paths.dockerfileFile,
     composePath: paths.composeFile,
     dockerignorePath: paths.dockerignoreFile,
@@ -384,6 +433,18 @@ export async function deployRun(input: {
   healthcheck?: DeploymentHealthcheckInput;
   providerPolicy?: Partial<DeploymentProviderPolicy>;
 }): Promise<DeployRunResult> {
+  return withDeploymentOperation(
+    { projectRoot: input.projectRoot, command: "deploy.run", phase: "preparing" },
+    (operation) => deployRunInternal(input, operation),
+  );
+}
+
+async function deployRunInternal(input: {
+  projectRoot: string;
+  appPath?: string;
+  healthcheck?: DeploymentHealthcheckInput;
+  providerPolicy?: Partial<DeploymentProviderPolicy>;
+}, operation: DeploymentOperationHandle): Promise<DeployRunResult> {
   const paths = getDeploymentPaths(input.projectRoot);
   let failedPhase: DeployRunResult["failedPhase"] = null;
   let prepared = false;
@@ -399,24 +460,26 @@ export async function deployRun(input: {
       await preparedRuntimeContractDiffers(input.projectRoot)
     ) {
       failedPhase = "prepare";
-      prepare = await deployPrepare({
+      await updateDeploymentOperationPhase(input.projectRoot, operation, "preparing");
+      prepare = await deployPrepareInternal({
         projectRoot: input.projectRoot,
         appPath: input.appPath,
         healthcheck: input.healthcheck,
         providerPolicy: input.providerPolicy,
-      });
+      }, operation);
       prepared = true;
     }
 
     failedPhase = "up";
-    up = await deployUp({
+    up = await deployUpInternal({
       projectRoot: input.projectRoot,
       appPath: input.appPath,
       healthcheck: input.healthcheck,
       providerPolicy: input.providerPolicy,
-    });
+    }, operation);
 
     failedPhase = "validate";
+    await updateDeploymentOperationPhase(input.projectRoot, operation, "validating");
     validate = await deployValidate({ projectRoot: input.projectRoot });
     if (!validate.valid) {
       const repair = await safeDeployRepair(input.projectRoot);
@@ -443,6 +506,7 @@ export async function deployRun(input: {
     }
 
     failedPhase = "status";
+    await updateDeploymentOperationPhase(input.projectRoot, operation, "checking_status");
     status = await deployStatus({ projectRoot: input.projectRoot });
     if (!status.running) {
       const repair = await safeDeployRepair(input.projectRoot);
@@ -508,10 +572,23 @@ export async function deployUp(input: {
   healthcheck?: DeploymentHealthcheckInput;
   providerPolicy?: Partial<DeploymentProviderPolicy>;
 }): Promise<DeployUpResult> {
+  return withDeploymentOperation(
+    { projectRoot: input.projectRoot, command: "deploy.up", phase: "building" },
+    (operation) => deployUpInternal(input, operation),
+  );
+}
+
+async function deployUpInternal(input: {
+  projectRoot: string;
+  appPath?: string;
+  healthcheck?: DeploymentHealthcheckInput;
+  providerPolicy?: Partial<DeploymentProviderPolicy>;
+}, operation: DeploymentOperationHandle): Promise<DeployUpResult> {
   const paths = getDeploymentPaths(input.projectRoot);
-  const spec = await ensurePrepared(input.projectRoot, input.appPath, input.healthcheck, input.providerPolicy);
+  const spec = await ensurePrepared(input.projectRoot, input.appPath, input.healthcheck, input.providerPolicy, operation);
   const composePath = resolveComposePath(input.projectRoot, spec);
 
+  await updateDeploymentOperationPhase(input.projectRoot, operation, "building");
   const configResult = await dockerCompose(input.projectRoot, composePath, ["config", "--quiet"], 30_000);
   await appendCommandLog(input.projectRoot, "docker compose config", configResult);
   if (configResult.exitCode !== 0) {
@@ -581,21 +658,29 @@ export async function deployUp(input: {
     );
   }
 
+  await updateDeploymentOperationPhase(input.projectRoot, operation, "starting");
   const container = await resolveDeploymentContainer(input.projectRoot, composePath, spec);
+  const startupInspection = await inspectDeploymentStartupLogs(input.projectRoot, composePath, spec, "docker compose startup logs");
   if (!container.running) {
+    const serviceNotRunning = `Compose app service ${spec.compose.selectedService ?? spec.serviceName} is not running after docker compose up.`;
+    const failureKind = startupInspection.logValidation.ok
+      ? "container_start"
+      : classifyStartupLogFailure(spec, startupInspection.rawLogs);
     const diagnostics = diagnoseDeploymentFailure({
       spec,
-      stdout: "",
-      stderr: `Compose app service ${spec.compose.selectedService ?? spec.serviceName} is not running after docker compose up.`,
+      stdout: startupInspection.logsResult.stdout,
+      stderr: [serviceNotRunning, startupInspection.logsResult.stderr].filter(Boolean).join("\n"),
     });
     await writeDeploymentRepairRequest({
       projectRoot: input.projectRoot,
       spec,
-      failureKind: "container_start",
-      command: composeCommand(spec, ["ps", spec.compose.selectedService ?? spec.serviceName]),
+      failureKind,
+      command: composeCommand(spec, startupInspection.logValidation.ok
+        ? ["ps", spec.compose.selectedService ?? spec.serviceName]
+        : startupInspection.logsArgs),
       exitCode: 1,
-      stdout: "",
-      stderr: `Compose app service ${spec.compose.selectedService ?? spec.serviceName} is not running after docker compose up.`,
+      stdout: startupInspection.logsResult.stdout,
+      stderr: [serviceNotRunning, startupInspection.logsResult.stderr].filter(Boolean).join("\n"),
       diagnostics,
       previousAttempts: await nextRepairAttempt(input.projectRoot),
     });
@@ -606,50 +691,56 @@ export async function deployUp(input: {
     });
   }
 
-  const logsArgs = composeLogsArgs(spec, "120");
-  const logsResult = await dockerCompose(input.projectRoot, composePath, logsArgs, 30_000);
-  await appendCommandLog(input.projectRoot, "docker compose startup logs", logsResult);
-  const startupLogs = `${logsResult.stdout}${logsResult.stderr ? `\n${logsResult.stderr}` : ""}`;
-  const logValidation = validateStartupLogs(startupLogs);
-  if (!logValidation.ok) {
-    const diagnostics = diagnoseDeploymentFailure({ spec, stdout: logsResult.stdout, stderr: logsResult.stderr });
+  if (!startupInspection.logValidation.ok) {
+    const diagnostics = diagnoseDeploymentFailure({
+      spec,
+      stdout: startupInspection.logsResult.stdout,
+      stderr: startupInspection.logsResult.stderr,
+    });
     await writeDeploymentRepairRequest({
       projectRoot: input.projectRoot,
       spec,
-      failureKind: classifyStartupLogFailure(spec, startupLogs),
-      command: composeCommand(spec, logsArgs),
-      exitCode: logsResult.exitCode,
-      stdout: logsResult.stdout,
-      stderr: logsResult.stderr,
+      failureKind: classifyStartupLogFailure(spec, startupInspection.rawLogs),
+      command: composeCommand(spec, startupInspection.logsArgs),
+      exitCode: startupInspection.logsResult.exitCode,
+      stdout: startupInspection.logsResult.stdout,
+      stderr: startupInspection.logsResult.stderr,
       diagnostics,
       previousAttempts: await nextRepairAttempt(input.projectRoot),
     });
     throw deployValidationFailed("Deployment startup logs contain a fatal error.", {
-      matchedPattern: logValidation.matchedPattern,
-      lines: logValidation.lines.slice(-20),
+      matchedPattern: startupInspection.logValidation.matchedPattern,
+      lines: startupInspection.logValidation.lines.slice(-20),
       diagnostics,
     });
   }
   const health = container.running ? await checkDeploymentHealth(spec) : disabledHealth(spec.runtime.healthcheck.url);
   const preview = container.running ? await checkDeploymentPreview(spec) : disabledHealth(spec.runtime.url);
+  await updateDeploymentOperationPhase(input.projectRoot, operation, "validating");
   const healthSpec = applyHealthyPath(spec, health);
   if (healthSpec !== spec) {
     await writeDeploymentSpec(input.projectRoot, healthSpec);
   }
   if (health.status === "unhealthy") {
+    const healthLogInspection = await inspectDeploymentStartupLogs(input.projectRoot, composePath, healthSpec, "docker compose healthcheck failure logs");
+    const failureKind = healthLogInspection.logValidation.ok
+      ? "healthcheck"
+      : classifyStartupLogFailure(healthSpec, healthLogInspection.rawLogs);
     const diagnostics = diagnoseDeploymentFailure({
       spec: healthSpec,
-      stdout: "",
-      stderr: health.error ?? `Healthcheck failed for ${health.url ?? spec.runtime.url}.`,
+      stdout: healthLogInspection.logsResult.stdout,
+      stderr: [health.error ?? `Healthcheck failed for ${health.url ?? spec.runtime.url}.`, healthLogInspection.logsResult.stderr].filter(Boolean).join("\n"),
     });
     await writeDeploymentRepairRequest({
       projectRoot: input.projectRoot,
       spec: healthSpec,
-      failureKind: "healthcheck",
-      command: ["GET", healthSpec.runtime.healthcheck.url ?? healthSpec.runtime.url],
+      failureKind,
+      command: failureKind === "healthcheck"
+        ? ["GET", healthSpec.runtime.healthcheck.url ?? healthSpec.runtime.url]
+        : composeCommand(healthSpec, healthLogInspection.logsArgs),
       exitCode: health.statusCode ?? 1,
-      stdout: "",
-      stderr: health.error ?? `Healthcheck failed for ${health.url ?? spec.runtime.url}.`,
+      stdout: healthLogInspection.logsResult.stdout,
+      stderr: [health.error ?? `Healthcheck failed for ${health.url ?? spec.runtime.url}.`, healthLogInspection.logsResult.stderr].filter(Boolean).join("\n"),
       diagnostics,
       previousAttempts: await nextRepairAttempt(input.projectRoot),
     });
@@ -664,19 +755,25 @@ export async function deployUp(input: {
     });
   }
   if (preview.status !== "healthy") {
+    const previewLogInspection = await inspectDeploymentStartupLogs(input.projectRoot, composePath, healthSpec, "docker compose preview failure logs");
+    const failureKind = previewLogInspection.logValidation.ok
+      ? "preview_not_verified"
+      : classifyStartupLogFailure(healthSpec, previewLogInspection.rawLogs);
     const diagnostics = diagnoseDeploymentFailure({
       spec: healthSpec,
-      stdout: "",
-      stderr: preview.error ?? `Preview verification failed for ${preview.url ?? spec.runtime.url}.`,
+      stdout: previewLogInspection.logsResult.stdout,
+      stderr: [preview.error ?? `Preview verification failed for ${preview.url ?? spec.runtime.url}.`, previewLogInspection.logsResult.stderr].filter(Boolean).join("\n"),
     });
     await writeDeploymentRepairRequest({
       projectRoot: input.projectRoot,
       spec: healthSpec,
-      failureKind: "preview_not_verified",
-      command: ["GET", preview.url ?? healthSpec.runtime.url],
+      failureKind,
+      command: failureKind === "preview_not_verified"
+        ? ["GET", preview.url ?? healthSpec.runtime.url]
+        : composeCommand(healthSpec, previewLogInspection.logsArgs),
       exitCode: preview.statusCode ?? 1,
-      stdout: "",
-      stderr: preview.error ?? `Preview verification failed for ${preview.url ?? spec.runtime.url}.`,
+      stdout: previewLogInspection.logsResult.stdout,
+      stderr: [preview.error ?? `Preview verification failed for ${preview.url ?? spec.runtime.url}.`, previewLogInspection.logsResult.stderr].filter(Boolean).join("\n"),
       diagnostics,
       previousAttempts: await nextRepairAttempt(input.projectRoot),
     });
@@ -715,10 +812,23 @@ export async function deployUp(input: {
 }
 
 export async function deployStatus(input: { projectRoot: string }): Promise<DeployStatusResult> {
+  const activeOperation = await readDeploymentOperationView(input.projectRoot);
   const state = await readDeploymentState(input.projectRoot);
   const spec = await readPreparedDeploymentSpec(input.projectRoot);
   const specServiceName = spec?.serviceName ?? null;
   const specAppServiceName = spec?.compose.selectedService ?? specServiceName;
+  if (activeOperation) {
+    return {
+      running: state?.running ?? false,
+      url: state?.url ?? spec?.runtime.url ?? null,
+      containerId: state?.containerId ?? null,
+      serviceName: specServiceName ?? state?.serviceName ?? null,
+      appServiceName: specAppServiceName ?? state?.appServiceName ?? state?.serviceName ?? null,
+      health: state?.health ?? null,
+      operationActive: true,
+      activeOperation,
+    };
+  }
   if (!state?.containerName) {
     return {
       running: false,
@@ -735,9 +845,7 @@ export async function deployStatus(input: { projectRoot: string }): Promise<Depl
     const activeSpec = spec ?? await readDeploymentSpec(input.projectRoot);
     const composePath = path.resolve(input.projectRoot, activeSpec.files.composePath);
     const expectedContainerName = containerNameFor(activeSpec);
-    const inspected = activeSpec.provider === "compose-existing" && activeSpec.compose.selectedService
-      ? await resolveDeploymentContainer(input.projectRoot, composePath, activeSpec)
-      : await inspectContainer(input.projectRoot, expectedContainerName);
+    const inspected = await resolveDeploymentContainer(input.projectRoot, composePath, activeSpec);
     const health = inspected.running ? await checkDeploymentPreview(activeSpec) : disabledHealth(state.url);
     const healthSpec = applyHealthyPath(activeSpec, health);
     if (healthSpec !== activeSpec) {
@@ -794,6 +902,7 @@ export async function deployStatus(input: { projectRoot: string }): Promise<Depl
 }
 
 export async function deployValidate(input: { projectRoot: string }): Promise<DeployValidateResult> {
+  await assertNoActiveDeploymentOperation(input.projectRoot);
   const paths = getDeploymentPaths(input.projectRoot);
   const spec = await ensurePrepared(input.projectRoot);
   const composePath = resolveComposePath(input.projectRoot, spec);
@@ -837,6 +946,18 @@ export async function deployValidate(input: { projectRoot: string }): Promise<De
 
 export async function deployLogs(input: { projectRoot: string }): Promise<DeployLogsResult> {
   const paths = getDeploymentPaths(input.projectRoot);
+  const activeOperation = await readDeploymentOperationView(input.projectRoot);
+  if (activeOperation) {
+    const lines = await readDeploymentLogTail(paths.logFile, 120);
+    return {
+      lines,
+      truncated: lines.length >= 120,
+      fullLogRef: toProjectRelative(input.projectRoot, paths.logFile),
+      operationActive: true,
+      activeOperation,
+    };
+  }
+
   const state = await readDeploymentState(input.projectRoot);
   if (!state?.containerName) {
     throw deployNotRunning(input.projectRoot);
@@ -873,6 +994,14 @@ export async function deployLogs(input: { projectRoot: string }): Promise<Deploy
 }
 
 export async function deployDown(input: { projectRoot: string }): Promise<DeployDownResult> {
+  return withDeploymentOperation(
+    { projectRoot: input.projectRoot, command: "deploy.down", phase: "stopping" },
+    (operation) => deployDownInternal(input, operation),
+  );
+}
+
+async function deployDownInternal(input: { projectRoot: string }, operation: DeploymentOperationHandle): Promise<DeployDownResult> {
+  await updateDeploymentOperationPhase(input.projectRoot, operation, "stopping");
   const state = await readDeploymentState(input.projectRoot);
   if (!state) {
     throw deployNotRunning(input.projectRoot);
@@ -903,34 +1032,16 @@ export async function deployDown(input: { projectRoot: string }): Promise<Deploy
 }
 
 export async function deployRepair(input: { projectRoot: string }): Promise<DeployRepairResult> {
+  await assertNoActiveDeploymentOperation(input.projectRoot);
   const request = await readDeploymentRepairRequest(input.projectRoot);
   if (!request) {
-    return {
-      hasRepairRequest: false,
-      repairId: null,
-      failureKind: null,
-      provider: null,
-      command: [],
-      failureOwner: null,
-      repairRoute: null,
-      failureRef: null,
-      fullLogRef: null,
-      errorWindow: null,
-      providerCandidates: [],
-      environment: null,
-      bootstrap: null,
-      diagnostics: null,
-      suggestedActions: [],
-      editableFiles: [],
-      protectedFiles: [],
-      stdoutTail: [],
-      stderrTail: [],
-      instruction: null,
-      repairInstruction: undefined,
-      maxAttempts: 0,
-      attempts: 0,
-      nextAction: "none",
-    };
+    return emptyDeployRepairResult();
+  }
+
+  const currentStatus = await safeDeployStatus(input.projectRoot);
+  if (currentStatus?.running && (currentStatus.health?.status === "healthy" || currentStatus.health?.status === "disabled")) {
+    await clearDeploymentFailureArtifacts(input.projectRoot);
+    return emptyDeployRepairResult();
   }
 
   const failureOwner = request.failureOwner ?? inferredRepairFailureOwner(request);
@@ -966,6 +1077,35 @@ export async function deployRepair(input: { projectRoot: string }): Promise<Depl
   };
 }
 
+function emptyDeployRepairResult(): DeployRepairResult {
+  return {
+    hasRepairRequest: false,
+    repairId: null,
+    failureKind: null,
+    provider: null,
+    command: [],
+    failureOwner: null,
+    repairRoute: null,
+    failureRef: null,
+    fullLogRef: null,
+    errorWindow: null,
+    providerCandidates: [],
+    environment: null,
+    bootstrap: null,
+    diagnostics: null,
+    suggestedActions: [],
+    editableFiles: [],
+    protectedFiles: [],
+    stdoutTail: [],
+    stderrTail: [],
+    instruction: null,
+    repairInstruction: undefined,
+    maxAttempts: 0,
+    attempts: 0,
+    nextAction: "none",
+  };
+}
+
 function inferredRepairFailureOwner(request: {
   failureKind: DeploymentRepairRequest["failureKind"];
   editableFiles: string[];
@@ -979,6 +1119,7 @@ function inferredRepairFailureOwner(request: {
   if (
     request.failureKind === "build_command_failed" ||
     request.failureKind === "start_command_failed" ||
+    request.failureKind === "application_startup_failed" ||
     request.failureKind === "http_probe_failed" ||
     request.failureKind === "preview_not_verified"
   ) {
@@ -1010,6 +1151,7 @@ function inferredRepairRoute(
 }
 
 export async function deployInspect(input: { projectRoot: string; refresh?: boolean }): Promise<DeployInspectResult> {
+  const activeOperation = await readDeploymentOperationView(input.projectRoot);
   let spec: DeploymentSpec | null = null;
   try {
     spec = await readDeploymentSpec(input.projectRoot);
@@ -1019,20 +1161,21 @@ export async function deployInspect(input: { projectRoot: string; refresh?: bool
     }
   }
 
-  if (input.refresh && spec) {
+  if (!activeOperation && input.refresh && spec) {
     await safeDeployStatus(input.projectRoot);
   }
   const state = await readDeploymentState(input.projectRoot);
-  const repair = await safeDeployRepair(input.projectRoot);
+  const repair = activeOperation ? null : await safeDeployRepair(input.projectRoot);
 
   return {
     prepared: Boolean(spec),
-    refreshed: Boolean(input.refresh && spec),
+    refreshed: Boolean(!activeOperation && input.refresh && spec),
     provider: spec?.provider ?? null,
     providerReason: spec?.providerReason ?? null,
     providerPolicy: spec?.providerPolicy ?? null,
     providerCandidates: spec?.providerCandidates ?? [],
     workspace: spec?.workspace ?? null,
+    codeEvidence: spec?.codeEvidence ?? null,
     detectedStack: spec?.detectedStack ?? null,
     files: spec?.files ?? null,
     compose: spec?.compose ?? null,
@@ -1057,6 +1200,7 @@ export async function deployInspect(input: { projectRoot: string; refresh?: bool
       bootstrapTaskCount: spec?.bootstrap.tasks.length ?? 0,
       hasRepairRequest: repair?.hasRepairRequest ?? false,
     },
+    ...(activeOperation ? { operationActive: true, activeOperation } : {}),
   };
 }
 
@@ -1065,7 +1209,23 @@ export async function deployBootstrap(input: {
   confirm?: boolean;
   kind?: DeploymentSpec["bootstrap"]["tasks"][number]["kind"];
 }): Promise<DeployBootstrapResult> {
-  const spec = await ensurePrepared(input.projectRoot);
+  if (input.confirm) {
+    return withDeploymentOperation(
+      { projectRoot: input.projectRoot, command: "deploy.bootstrap", phase: "bootstrapping" },
+      (operation) => deployBootstrapInternal(input, operation),
+    );
+  }
+  await assertNoActiveDeploymentOperation(input.projectRoot);
+  return deployBootstrapInternal(input);
+}
+
+async function deployBootstrapInternal(input: {
+  projectRoot: string;
+  confirm?: boolean;
+  kind?: DeploymentSpec["bootstrap"]["tasks"][number]["kind"];
+}, operation?: DeploymentOperationHandle): Promise<DeployBootstrapResult> {
+  await updateDeploymentOperationPhase(input.projectRoot, operation, "bootstrapping");
+  const spec = await ensurePrepared(input.projectRoot, undefined, undefined, undefined, operation);
   const composePath = resolveComposePath(input.projectRoot, spec);
   const selectedTasks = input.kind
     ? spec.bootstrap.tasks.filter((task) => task.kind === input.kind)
@@ -1155,6 +1315,7 @@ async function ensurePrepared(
   appPath?: string,
   healthcheck?: DeploymentHealthcheckInput,
   providerPolicy?: Partial<DeploymentProviderPolicy>,
+  operation?: DeploymentOperationHandle,
 ): Promise<DeploymentSpec> {
   const spec = await readDeploymentSpec(projectRoot);
   const composePath = path.resolve(projectRoot, spec.files.composePath);
@@ -1168,7 +1329,7 @@ async function ensurePrepared(
     await preparedRuntimeContractDiffers(projectRoot, spec) ||
     providerPolicyChanged(spec, providerPolicy)
   ) {
-    await deployPrepare({ projectRoot, appPath, healthcheck, providerPolicy });
+    await deployPrepareInternal({ projectRoot, appPath, healthcheck, providerPolicy }, operation);
     return readDeploymentSpec(projectRoot);
   }
   const updatedSpec = applyHealthcheckInput(spec, healthcheck);
@@ -1233,8 +1394,16 @@ async function preparedRuntimeContractDiffers(projectRoot: string, currentSpec?:
     };
     const latest = await loadDeploymentRuntimeContract(projectRoot, latestStackForContext);
     const latestDeploymentStack = applyRuntimeContractToStack(latestStackForContext, latest);
+    const technicalBaseline = await loadDeploymentTechnicalBaseline(projectRoot);
+    const latestEvidence = await buildDeploymentCodeEvidence({
+      projectRoot,
+      stack: latestDeploymentStack,
+      technicalBaseline,
+    });
+    const latestEvidenceStack = applyDeploymentCodeEvidenceToStack(latestDeploymentStack, latestEvidence);
     return !runtimeContractsEquivalent(spec.runtimeContract, latest) ||
-      deploymentStackDiffers(spec.detectedStack, latestDeploymentStack);
+      deploymentStackDiffers(spec.detectedStack, latestEvidenceStack) ||
+      spec.codeEvidence?.fingerprint !== latestEvidence.fingerprint;
   } catch {
     return false;
   }
@@ -1256,7 +1425,10 @@ function runtimeContractsEquivalent(
     left.previewPath === right.previewPath &&
     left.healthPath === right.healthPath &&
     left.frontendOutputDir === right.frontendOutputDir &&
-    JSON.stringify(left.apiPaths) === JSON.stringify(right.apiPaths)
+    left.probeKind === right.probeKind &&
+    JSON.stringify(left.apiPaths) === JSON.stringify(right.apiPaths) &&
+    JSON.stringify(left.environment) === JSON.stringify(right.environment) &&
+    JSON.stringify(left.dependencyServices) === JSON.stringify(right.dependencyServices)
   );
 }
 
@@ -1273,7 +1445,8 @@ function deploymentStackDiffers(
     left.framework !== right.framework ||
     left.packageManager !== right.packageManager ||
     left.runtimeVersion !== right.runtimeVersion ||
-    left.runtimeVersionSource !== right.runtimeVersionSource
+    left.runtimeVersionSource !== right.runtimeVersionSource ||
+    JSON.stringify(left.services) !== JSON.stringify(right.services)
   );
 }
 
@@ -1344,17 +1517,36 @@ function composeLogsArgs(spec: DeploymentSpec, tail: string): string[] {
     : ["logs", "--tail", tail];
 }
 
+async function inspectDeploymentStartupLogs(
+  projectRoot: string,
+  composePath: string,
+  spec: DeploymentSpec,
+  label: string,
+) {
+  const logsArgs = composeLogsArgs(spec, "120");
+  const logsResult = await dockerCompose(projectRoot, composePath, logsArgs, 30_000);
+  await appendCommandLog(projectRoot, label, logsResult);
+  const rawLogs = `${logsResult.stdout}${logsResult.stderr ? `\n${logsResult.stderr}` : ""}`;
+  return {
+    logsArgs,
+    logsResult,
+    rawLogs,
+    logValidation: validateStartupLogs(rawLogs),
+  };
+}
+
 async function resolveDeploymentContainer(
   projectRoot: string,
   composePath: string,
   spec: DeploymentSpec,
 ): Promise<{ containerId: string | null; running: boolean; containerName: string }> {
-  if (spec.provider === "compose-existing" && spec.compose.selectedService) {
-    const container = await findComposeServiceContainer(projectRoot, composePath, spec.compose.selectedService);
+  const serviceName = deploymentAppServiceName(spec);
+  const container = await findComposeServiceContainer(projectRoot, composePath, serviceName);
+  if (container.containerId) {
     return {
       containerId: container.containerId,
       running: container.running,
-      containerName: container.containerName ?? spec.compose.selectedService,
+      containerName: container.containerName ?? serviceName,
     };
   }
 
@@ -1460,7 +1652,14 @@ function classifyStartupLogFailure(
   ) {
     return "start_command_failed";
   }
+  if (isApplicationStartupFailure(combined)) {
+    return "application_startup_failed";
+  }
   return "container_start";
+}
+
+function isApplicationStartupFailure(logs: string): boolean {
+  return /application failed to start|beancreationexception|unsatisfieddependencyexception|applicationcontextexception|webserverexception|flywayexception|liquibaseexception|hibernateexception|schemamanagementexception|psqlexception|communications link failure|unable to obtain jdbc connection|prisma.*p20\d{2}|django\.db\.utils\.|improperlyconfigured|active(record|model)::|illuminate\\database|sqlstate\[/.test(logs);
 }
 
 function packageScriptNameFromCommand(command: string): string | null {
@@ -1490,6 +1689,14 @@ function splitLines(value: string): string[] {
     .filter((line) => line.length > 0);
 }
 
+async function readDeploymentLogTail(logFile: string, limit: number): Promise<string[]> {
+  if (!(await pathExists(logFile))) {
+    return [];
+  }
+  const content = await fs.readFile(logFile, "utf8");
+  return splitLines(content).slice(-limit);
+}
+
 function toPrepareResult(
   projectRoot: string,
   specFile: string,
@@ -1505,6 +1712,7 @@ function toPrepareResult(
     providerPolicy: spec.providerPolicy,
     providerCandidates: spec.providerCandidates,
     workspace: spec.workspace,
+    codeEvidence: spec.codeEvidence ?? null,
     environment: spec.environment,
     bootstrap: spec.bootstrap,
     compose: spec.compose,
@@ -1512,6 +1720,45 @@ function toPrepareResult(
     url: spec.runtime.url,
     reused: spec.files.reused,
   };
+}
+
+function assertDeploymentCodeEvidenceReady(
+  projectRoot: string,
+  evidence: DeploymentCodeEvidence,
+  evidenceRef: string,
+): void {
+  const retryCommand = {
+    name: "deploy prepare",
+    argv: ["deploy", "prepare"],
+  };
+  if (evidence.conflicts.length > 0) {
+    throw deployConflict("Deployment prepare found conflicting technology and repository evidence.", {
+      status: "blocked",
+      code: "DEPLOY_CONFLICT",
+      evidenceRef,
+      conflicts: evidence.conflicts,
+      warnings: evidence.warnings,
+      nextAction: "ask_user",
+      retryCommand,
+      projectRoot,
+    });
+  }
+  if (evidence.missingFacts.length > 0) {
+    const nextAction = evidence.missingFacts.some((fact) => fact.resolution === "ask_user")
+      ? "ask_user"
+      : "execution_repair";
+    throw deploySourceInsufficient("Deployment prepare could not derive a complete deployment source model.", {
+      status: "blocked",
+      code: "DEPLOY_SOURCE_INSUFFICIENT",
+      evidenceRef,
+      missingFacts: evidence.missingFacts,
+      ambiguous: evidence.dependencyFacts.ambiguous,
+      warnings: evidence.warnings,
+      nextAction,
+      retryCommand,
+      projectRoot,
+    });
+  }
 }
 
 async function loadDeploymentRuntimeContract(projectRoot: string, stack: DeploymentSpec["detectedStack"]): Promise<DeploymentSpec["runtimeContract"]> {
@@ -1576,7 +1823,9 @@ function applyRuntimeContractToStack(
     healthcheckPath: runtimeContract.healthPath ?? runtimeContract.previewPath ?? stack.healthcheckPath,
     outputDirectory: runtimeContract.frontendOutputDir ?? stack.outputDirectory,
     port: runtimeContract.port ?? stack.port,
-    services: runtimeContract.dependencyServicePolicy === "contract_only" ? [] : stack.services,
+    services: runtimeContract.dependencyServicePolicy === "contract_only"
+      ? contractOnlyDependencyServices(runtimeContract, stack.services)
+      : mergeDependencyServices(stack.services, runtimeContract.dependencyServices),
   };
 }
 
@@ -1694,11 +1943,105 @@ function runtimeContractSignals(runtimeContract: DeploymentSpec["runtimeContract
     runtimeContract.buildCommand,
     runtimeContract.startCommand,
     runtimeContract.frontendOutputDir,
+    ...runtimeContract.environment.required,
+    ...runtimeContract.environment.optional,
+    ...runtimeContract.dependencyServices.flatMap((service) => [
+      service.kind,
+      service.serviceName,
+      service.image,
+      ...Object.keys(service.connectionEnv),
+      ...Object.values(service.connectionEnv),
+    ]),
     ...runtimeContract.apiPaths,
   ]
     .filter((value): value is string => typeof value === "string")
     .join("\n")
     .toLowerCase();
+}
+
+function mergeDependencyServices(
+  detected: DeploymentSpec["detectedStack"]["services"],
+  declared: DeploymentSpec["detectedStack"]["services"],
+): DeploymentSpec["detectedStack"]["services"] {
+  const byKind = new Map<string, DeploymentSpec["detectedStack"]["services"][number]>();
+  for (const service of detected) {
+    byKind.set(service.kind, service);
+  }
+  for (const service of declared) {
+    byKind.set(service.kind, service);
+  }
+  return [...byKind.values()];
+}
+
+function contractOnlyDependencyServices(
+  runtimeContract: DeploymentSpec["runtimeContract"],
+  detected: DeploymentSpec["detectedStack"]["services"],
+): DeploymentSpec["detectedStack"]["services"] {
+  if (runtimeContract.dependencyServices.length > 0) {
+    return runtimeContract.dependencyServices;
+  }
+  if (!runtimeContractRequestsSqlDatabase(runtimeContract)) {
+    return [];
+  }
+  return detected
+    .filter((service) => ["postgres", "mysql"].includes(service.kind))
+    .map((service) => serviceWithRuntimeContractConnectionEnv(service, runtimeContract));
+}
+
+function runtimeContractRequestsSqlDatabase(runtimeContract: DeploymentSpec["runtimeContract"]): boolean {
+  const signals = [
+    runtimeContract.runtimeKind,
+    runtimeContract.buildCommand,
+    runtimeContract.startCommand,
+    ...runtimeContract.environment.required,
+    ...runtimeContract.environment.optional,
+    ...runtimeContract.apiPaths,
+  ]
+    .filter((value): value is string => typeof value === "string")
+    .join("\n")
+    .toLowerCase();
+  return /database_url|database_uri|spring_datasource|spring\.datasource|datasource_url|db_url|jdbc/.test(signals);
+}
+
+function serviceWithRuntimeContractConnectionEnv(
+  service: DeploymentSpec["detectedStack"]["services"][number],
+  runtimeContract: DeploymentSpec["runtimeContract"],
+): DeploymentSpec["detectedStack"]["services"][number] {
+  const requested = new Set([
+    ...runtimeContract.environment.required,
+    ...runtimeContract.environment.optional,
+  ]);
+  if (
+    !requested.has("SPRING_DATASOURCE_URL") &&
+    !requested.has("SPRING_DATASOURCE_USERNAME") &&
+    !requested.has("SPRING_DATASOURCE_PASSWORD")
+  ) {
+    return service;
+  }
+
+  if (service.kind === "postgres") {
+    return {
+      ...service,
+      connectionEnv: {
+        ...service.connectionEnv,
+        SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres:5432/loom",
+        SPRING_DATASOURCE_USERNAME: "loom",
+        SPRING_DATASOURCE_PASSWORD: "loom",
+      },
+    };
+  }
+  if (service.kind === "mysql") {
+    return {
+      ...service,
+      connectionEnv: {
+        ...service.connectionEnv,
+        SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/loom",
+        SPRING_DATASOURCE_USERNAME: "loom",
+        SPRING_DATASOURCE_PASSWORD: "loom",
+      },
+    };
+  }
+  return service;
 }
 
 function deploymentStartCommand(

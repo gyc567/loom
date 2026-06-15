@@ -42,6 +42,14 @@ For plain `/loom deploy` or `/loom-deploy`, run:
 LOOM_AGENT_PROFILE=opencode LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" deploy run --project-root /abs/project
 ```
 
+## Active Deploy Operation
+
+While `deploy run`, `deploy up`, `deploy prepare`, `deploy down`, or `deploy bootstrap --confirm` is running, do not start another mutating deploy command. Observation is limited to `deploy status`, `deploy inspect`, and `deploy logs`.
+
+Do not run raw `docker compose`, `docker build`, `docker run`, or manual container inspection as a substitute for Loom deploy observation. Do not kill, `pkill`, or stop deploy, Docker Compose, Docker build, or Loom-managed deployment processes.
+
+If the CLI returns `DEPLOY_OPERATION_ACTIVE`, report the active operation's `command`, `phase`, `elapsedMs`, and `logRef`. Then wait for user instruction or observe with `deploy status`, `deploy inspect`, or `deploy logs`; do not take over the running operation.
+
 For explicit subcommands, run only the requested command:
 
 ```bash
@@ -66,6 +74,15 @@ If `deploy run` returns `completed: false`, inspect `data.repair` and the return
 - If `nextAction` is `edit-and-rerun-up`, repair only returned `editableFiles`, then run `loom deploy up --project-root /abs/project`.
 - If `nextAction` is `fix-docker`, ask the user to start Docker, fix permissions, or pull the blocked base image/registry dependency.
 - If `nextAction` is `request-user-approval`, explain protected files and ask before editing them.
+
+## Structured Deploy Blockers
+
+Some deploy prepare/run failures are source-of-truth blockers, not repair loops.
+
+- `DEPLOY_SOURCE_INSUFFICIENT`: the CLI could not derive a complete deploy source model from TechnicalBaseline, code evidence, and existing deployment assets. Read `error.details.evidenceRef`, `missingFacts`, `ambiguous`, and `nextAction`; report the missing facts or ask for the requested decision. Do not rerun blindly, invent dependency services, or generate Dockerfile/Compose assets from memory.
+- `DEPLOY_CONFLICT`: TechnicalBaseline expectations conflict with code evidence or existing deploy assets. Read `error.details.evidenceRef` and `conflicts`; ask the user or follow the returned `nextAction`. Do not silently switch stacks, change dependency services, or overwrite generated assets to make the conflict disappear.
+
+TechnicalBaseline is expectation context. The CLI's deploy code evidence, generated spec, and blocker envelope decide deployment behavior. Do not override a structured blocker with command text, prior chat memory, or manual Docker commands.
 
 ## Knowledge Layout
 

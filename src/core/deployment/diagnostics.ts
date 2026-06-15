@@ -73,6 +73,13 @@ const logPatterns: PatternDiagnostic[] = [
     suggestedAction: "Inspect bootstrap diagnostics and ask before running migration commands; do not run migrations automatically.",
   },
   {
+    code: "framework_startup_failed",
+    severity: "error",
+    pattern: /application failed to start|beancreationexception|unsatisfieddependencyexception|applicationcontextexception|webserverexception|flywayexception|liquibaseexception|hibernateexception|schemamanagementexception|psqlexception|communications link failure|unable to obtain jdbc connection|django\.db\.utils\.|improperlyconfigured|active(record|model)::|illuminate\\database|sqlstate\[/i,
+    message: "The application framework failed during startup.",
+    suggestedAction: "Route this through execution repair; inspect application dependencies, migrations, ORM/database compatibility, runtime configuration, and startup code before editing generated Dockerfile/Compose.",
+  },
+  {
     code: "prisma_migration_needed",
     severity: "error",
     pattern: /prisma.*(p20\d{2}|migrate|does not exist|database)|the table .* does not exist/i,

@@ -6,11 +6,15 @@ export type DeploymentPaths = {
   stateDir: string;
   logsDir: string;
   repairsDir: string;
+  evidenceDir: string;
   specFile: string;
   stateFile: string;
+  activeOperationFile: string;
+  staleOperationFile: string;
   logFile: string;
   repairFile: string;
   failureFile: string;
+  codeEvidenceFile: string;
   generatedDir: string;
   dockerfileFile: string;
   composeFile: string;
@@ -24,6 +28,7 @@ export function getDeploymentPaths(projectRoot: string): DeploymentPaths {
   const stateDir = path.join(deploymentDir, "state");
   const logsDir = path.join(deploymentDir, "logs");
   const repairsDir = path.join(deploymentDir, "repairs");
+  const evidenceDir = path.join(deploymentDir, "evidence");
   const generatedDir = path.join(specsDir, "generated");
 
   return {
@@ -31,11 +36,15 @@ export function getDeploymentPaths(projectRoot: string): DeploymentPaths {
     stateDir,
     logsDir,
     repairsDir,
+    evidenceDir,
     specFile: path.join(specsDir, "local.json"),
     stateFile: path.join(stateDir, "local.json"),
+    activeOperationFile: path.join(stateDir, "active-operation.json"),
+    staleOperationFile: path.join(stateDir, "last-stale-operation.json"),
     logFile: path.join(logsDir, "local.log"),
     repairFile: path.join(stateDir, "repair-request.json"),
     failureFile: path.join(stateDir, "latest-failure.json"),
+    codeEvidenceFile: path.join(evidenceDir, "latest-code-evidence.json"),
     generatedDir,
     dockerfileFile: path.join(generatedDir, "Dockerfile"),
     composeFile: path.join(generatedDir, "compose.yaml"),

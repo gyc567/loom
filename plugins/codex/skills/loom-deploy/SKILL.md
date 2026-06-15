@@ -54,6 +54,14 @@ For a plain `@loom deploy` request, run the full local workflow:
 LOOM_AGENT_PROFILE=codex LOOM_COMPACT_OUTPUT=1 "$HOME/.loom/bin/loom-cli" deploy run --project-root /abs/project
 ```
 
+## Active Deploy Operation
+
+While `deploy run`, `deploy up`, `deploy prepare`, `deploy down`, or `deploy bootstrap --confirm` is running, do not start another mutating deploy command. Observation is limited to `deploy status`, `deploy inspect`, and `deploy logs`.
+
+Do not run raw `docker compose`, `docker build`, `docker run`, or manual container inspection as a substitute for Loom deploy observation. Do not kill, `pkill`, or stop deploy, Docker Compose, Docker build, or Loom-managed deployment processes.
+
+If the CLI returns `DEPLOY_OPERATION_ACTIVE`, report the active operation's `command`, `phase`, `elapsedMs`, and `logRef`. Then wait for user instruction or observe with `deploy status`, `deploy inspect`, or `deploy logs`; do not take over the running operation.
+
 If `deploy run` returns `completed: true`, report the URL plus preview verification result and health/status. Do not run raw `docker compose`, `docker build`, `docker run`, or manually recreate loom containers after a successful deploy command. Use `loom deploy status`, `loom deploy inspect`, `loom deploy validate`, `loom deploy logs`, or `loom deploy down` for follow-up checks.
 
 If `deploy run` returns `completed: false`, inspect `data.repair`:
@@ -100,6 +108,15 @@ Do not manually create Dockerfiles, rewrite Compose files, start alternate local
 If diagnostics point to migrations/bootstrap, run `loom deploy bootstrap --project-root /abs/project` first to show commands. Only run `--confirm` after the user explicitly approves execution against the active local Compose deployment.
 
 loom v1 uses Dockerfile/Compose only. It does not switch to Railpack, Buildpacks, or other external builders; if deployment cannot be repaired with Dockerfile/Compose, explain the blocker clearly.
+
+## Structured Deploy Blockers
+
+Some deploy prepare/run failures are source-of-truth blockers, not repair loops.
+
+- `DEPLOY_SOURCE_INSUFFICIENT`: the CLI could not derive a complete deploy source model from TechnicalBaseline, code evidence, and existing deployment assets. Read `error.details.evidenceRef`, `missingFacts`, `ambiguous`, and `nextAction`; report the missing facts or ask for the requested decision. Do not rerun blindly, invent dependency services, or generate Dockerfile/Compose assets from memory.
+- `DEPLOY_CONFLICT`: TechnicalBaseline expectations conflict with code evidence or existing deploy assets. Read `error.details.evidenceRef` and `conflicts`; ask the user or follow the returned `nextAction`. Do not silently switch stacks, change dependency services, or overwrite generated assets to make the conflict disappear.
+
+TechnicalBaseline is expectation context. The CLI's deploy code evidence, generated spec, and blocker envelope decide deployment behavior. Do not override a structured blocker with skill text, prior chat memory, or manual Docker commands.
 
 ## Knowledge Layout
 

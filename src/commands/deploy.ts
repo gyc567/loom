@@ -80,7 +80,9 @@ export async function handleDeployStatus(ctx: CommandContext): Promise<CliEnvelo
     "deploy.status",
     ctx.projectRoot,
     result,
-    result.running
+    result.operationActive && result.activeOperation
+      ? `Deployment operation is active: ${result.activeOperation.command} is ${result.activeOperation.phase}.`
+      : result.running
       ? result.health && result.health.status !== "healthy" && result.health.status !== "disabled"
         ? `Deployment container is running at ${result.url}, but preview verification is ${result.health.status}.`
         : `Deployment is running at ${result.url}.`
@@ -94,7 +96,9 @@ export async function handleDeployInspect(ctx: CommandContext): Promise<CliEnvel
     "deploy.inspect",
     ctx.projectRoot,
     result,
-    result.prepared
+    result.operationActive && result.activeOperation
+      ? `Deployment operation is active: ${result.activeOperation.command} is ${result.activeOperation.phase}.`
+      : result.prepared
       ? `Deployment inspect ready for provider ${result.provider}.`
       : "Deployment is not prepared.",
   );
@@ -112,7 +116,14 @@ export async function handleDeployValidate(ctx: CommandContext): Promise<CliEnve
 
 export async function handleDeployLogs(ctx: CommandContext): Promise<CliEnvelope> {
   const result = await deployLogs({ projectRoot: ctx.projectRoot });
-  return ok("deploy.logs", ctx.projectRoot, result, "Deployment logs are available.");
+  return ok(
+    "deploy.logs",
+    ctx.projectRoot,
+    result,
+    result.operationActive && result.activeOperation
+      ? `Deployment operation is active: ${result.activeOperation.command} is ${result.activeOperation.phase}; returning Loom deploy log tail.`
+      : "Deployment logs are available.",
+  );
 }
 
 export async function handleDeployDown(ctx: CommandContext): Promise<CliEnvelope> {

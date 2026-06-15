@@ -17,6 +17,9 @@ export type LoomErrorCode =
   | "DEPLOY_NOT_PREPARED"
   | "DEPLOY_NOT_RUNNING"
   | "DOCKER_UNAVAILABLE"
+  | "DEPLOY_SOURCE_INSUFFICIENT"
+  | "DEPLOY_CONFLICT"
+  | "DEPLOY_OPERATION_ACTIVE"
   | "DEPLOY_VALIDATION_FAILED"
   | "INTERNAL_ERROR";
 
@@ -99,6 +102,30 @@ export function dockerUnavailable(message = "Docker is unavailable.", details?: 
 export function deployValidationFailed(message: string, details?: unknown): LoomError {
   return new LoomError({
     code: "DEPLOY_VALIDATION_FAILED",
+    message,
+    details,
+  });
+}
+
+export function deploySourceInsufficient(message: string, details?: unknown): LoomError {
+  return new LoomError({
+    code: "DEPLOY_SOURCE_INSUFFICIENT",
+    message,
+    details,
+  });
+}
+
+export function deployConflict(message: string, details?: unknown): LoomError {
+  return new LoomError({
+    code: "DEPLOY_CONFLICT",
+    message,
+    details,
+  });
+}
+
+export function deployOperationActive(message: string, details?: unknown): LoomError {
+  return new LoomError({
+    code: "DEPLOY_OPERATION_ACTIVE",
     message,
     details,
   });
@@ -319,6 +346,12 @@ export function summaryForError(code: LoomErrorCode): string {
       return "Deployment is not running.";
     case "DOCKER_UNAVAILABLE":
       return "Docker is unavailable.";
+    case "DEPLOY_SOURCE_INSUFFICIENT":
+      return "Deployment source is insufficient.";
+    case "DEPLOY_CONFLICT":
+      return "Deployment source has conflicts.";
+    case "DEPLOY_OPERATION_ACTIVE":
+      return "Deployment operation is already active.";
     case "DEPLOY_VALIDATION_FAILED":
       return "Deployment validation failed.";
     case "INTERNAL_ERROR":

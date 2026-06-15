@@ -59,6 +59,26 @@ const detectedStackSchema = z.object({
   workspacePackageJsonPaths: z.array(z.string().min(1)).default([]),
 });
 
+const dependencyServiceSchema = z.object({
+  kind: z.enum([
+    "postgres",
+    "redis",
+    "mysql",
+    "mongodb",
+    "rabbitmq",
+    "elasticsearch",
+    "minio",
+  ]),
+  serviceName: z.string().min(1),
+  image: z.string().min(1),
+  port: z.number().int().positive(),
+  env: z.record(z.string()),
+  connectionEnv: z.record(z.string()),
+  volumeName: z.string().nullable(),
+  volumeTarget: z.string().nullable(),
+  reason: z.string().min(1),
+});
+
 const deploymentWorkspaceCandidateSchema = z.object({
   path: z.string().min(1),
   score: z.number(),
@@ -95,7 +115,9 @@ const deploymentEnvVariableSchema = z.object({
     "env-example",
     "local-env-file",
     "source-code",
+    "configuration",
     "framework",
+    "runtime-contract",
   ])),
   reason: z.string().min(1),
 });
@@ -191,6 +213,43 @@ const deploymentRuntimeContractSchema = z.object({
   healthPath: z.string().nullable(),
   apiPaths: z.array(z.string()),
   frontendOutputDir: z.string().nullable(),
+  probeKind: z.enum(["http", "process", "command"]).default("http"),
+  environment: z.object({
+    required: z.array(z.string()).default([]),
+    optional: z.array(z.string()).default([]),
+  }).default({
+    required: [],
+    optional: [],
+  }),
+  dependencyServices: z.array(dependencyServiceSchema).default([]),
+}).optional();
+
+const deploymentCodeEvidenceSummarySchema = z.object({
+  ref: z.string().min(1),
+  fingerprint: z.string().min(1),
+  technicalBaselineRef: z.string().min(1).nullable(),
+  runtimeFacts: z.object({
+    web: z.string().nullable(),
+    backend: z.string().nullable(),
+    fullstack: z.string().nullable(),
+  }),
+  dependencyServices: z.array(z.object({
+    kind: z.enum([
+      "postgres",
+      "redis",
+      "mysql",
+      "mongodb",
+      "rabbitmq",
+      "elasticsearch",
+      "minio",
+    ]),
+    serviceName: z.string().min(1),
+    reason: z.string().min(1),
+  })).default([]),
+  embeddedStores: z.array(z.string()).default([]),
+  warningCount: z.number().int().nonnegative(),
+  conflictCount: z.number().int().nonnegative(),
+  missingFactCount: z.number().int().nonnegative(),
 }).optional();
 
 const deploymentSpecSchema = z.object({
@@ -228,6 +287,7 @@ const deploymentSpecSchema = z.object({
   bootstrap: deploymentBootstrapDiagnosticsSchema,
   compose: deploymentComposeInfoSchema,
   runtimeContract: deploymentRuntimeContractSchema,
+  codeEvidence: deploymentCodeEvidenceSummarySchema,
   files: z.object({
     dockerfilePath: z.string().min(1).nullable(),
     composePath: z.string().min(1),
@@ -284,6 +344,12 @@ const deploymentSpecSchema = z.object({
     healthPath: spec.detectedStack.healthcheckPath ?? null,
     apiPaths: [],
     frontendOutputDir: spec.detectedStack.outputDirectory,
+    probeKind: spec.detectedStack.startCommand ? "http" as const : "process" as const,
+    environment: {
+      required: [],
+      optional: [],
+    },
+    dependencyServices: [],
   },
 }));
 
@@ -330,6 +396,7 @@ const deploymentRepairRequestSchema = z.object({
     "runtime_contract_mismatch",
     "build_command_failed",
     "start_command_failed",
+    "application_startup_failed",
     "http_probe_failed",
     "preview_not_verified",
     "deploy_asset_invalid",
@@ -394,6 +461,7 @@ const deploymentFailureKindSchema = z.enum([
   "runtime_contract_mismatch",
   "build_command_failed",
   "start_command_failed",
+  "application_startup_failed",
   "http_probe_failed",
   "preview_not_verified",
   "deploy_asset_invalid",
